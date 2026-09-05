@@ -108,9 +108,23 @@ async def main():
     print("[*] Диспетчер ИИ-Радара УСПЕШНО ЗАПУЩЕН")
     print("=======================================")
     await app.start()
+    
+    # --- НАЧАЛО ФИКСА ОШИБКИ PEER ID ---
+    print("[*] Синхронизирую подписки с сервером Телеграма...")
+    try:
+        async for dialog in app.get_dialogs():
+            pass # Просто пролистываем, чтобы юзербот сохранил всё в базу
+        print("[+] Синхронизация каналов прошла успешно!")
+    except Exception as e:
+        print(f"[-] Небольшая заминка при синхронизации: {e}")
+    # --- КОНЕЦ ФИКСА ---
+
     from pyrogram import idle
     await idle()
     await app.stop()
+
+if __name__ == "__main__":
+    app.run(main())
 
 if __name__ == "__main__":
     app.run(main())
