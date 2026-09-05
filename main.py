@@ -3,6 +3,9 @@ import asyncio
 import requests
 from pyrogram import Client, filters
 import google.generativeai as genai
+from dotenv import load_dotenv
+
+load_dotenv()
 
 API_ID = 36567125
 API_HASH = "74f27c0240ce52057f170f7b119d74f3"
