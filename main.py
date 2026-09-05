@@ -10,21 +10,25 @@ load_dotenv()
 API_ID = 36567125
 API_HASH = "74f27c0240ce52057f170f7b119d74f3"
 
-# Получаем секреты из настроек сервера (чтобы никто их не украл)
+# Получаем секреты из настроек сервера
 SESSION_STRING = os.getenv("SESSION_STRING")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 BOTS = {
     "SPB": {"token": os.getenv("BOT_SPB"), "channel": "@RadarLO_SPB", "name": "Питер и Ленинградская область"},
-    "MSK": {"token": os.getenv("BOT_MSK"), "channel": "@Radar_MSK_OBL", "name": "Москва и область"},
-    "BELGOROD": {"token": os.getenv("BOT_BELGOROD"), "channel": "@Radar_Belgorod_Obl", "name": "Белгород и область"},
-    "KURSK": {"token": os.getenv("BOT_KURSK"), "channel": "@Radar_Kursk", "name": "Курск и область"}
+    "MSK": {"token": os.getenv("BOT_MSK"), "channel": "@Radar_MSK_OBL", "name": "Москва и Московская область"},
+    "BELGOROD": {"token": os.getenv("BOT_BELGOROD"), "channel": "@Radar_Belgorod_Obl", "name": "Белгород и Белгородская область"},
+    "KURSK": {"token": os.getenv("BOT_KURSK"), "channel": "@Radar_Kursk", "name": "Курск и Курская область"}
 }
 
-SOURCES = ["@vrv_radar", "@radar_ru_belgorod", "@locatorru"]
+# === ЖЕСТКОЕ РАЗДЕЛЕНИЕ ИСТОЧНИКОВ ===
+SOURCES = [
+    "@vrv_radar",  # Основа для Москвы и Питера
+    "@locatorru"   # Основа для Белгорода и Курска
+    # "@radar_ru_belgorod"  <-- ТВОЙ РЕЗЕРВ ДЛЯ БЕЛГОРОДА. Если Локатор ляжет, просто убери решетку # слева от этой строки!
+]
 
 genai.configure(api_key=GEMINI_API_KEY)
-# Используем flash для молниеносной скорости реакции
 model = genai.GenerativeModel('gemini-3.8-flash')
 
 app = Client("radar_bot", session_string=SESSION_STRING, api_id=API_ID, api_hash=API_HASH)
@@ -86,12 +90,12 @@ MSG: [эмодзи] [текст]
 
 @app.on_message(filters.chat(SOURCES))
 async def radar_handler(client, message):
-    # Берем только текст, игнорируем тяжелые медиа
     text = message.text or message.caption or ""
     if not text:
         return 
 
     source = message.chat.username or message.chat.title or ""
+    source_lower = source.lower()
     
     print(f"[*] Получено сообщение из {source}. Передаю нейросети...")
     
@@ -111,18 +115,22 @@ async def radar_handler(client, message):
         target_part = parts[0].replace("TARGET:", "").strip().upper()
         clean_text = parts[1].strip()
         
-        for region in BOTS.keys():
-            if region in target_part:
-                targets.append(region)
-                
-    # Если ИИ тупанул и не определил регион, отправляем по дефолту источника
-    if not targets:
-        if "belgorod" in source.lower(): targets.append("BELGOROD")
-        elif "locator" in source.lower(): targets.append("KURSK")
-        elif "vrv" in source.lower(): targets.append("SPB")
-        else: targets.append("BELGOROD")
+        # === ЖЕСТКАЯ ФИЛЬТРАЦИЯ МАРШРУТОВ (АНТИ-ДУБЛИ И АНТИ-ПУТАНИЦА) ===
+        if "vrv_radar" in source_lower:
+            # ВРВ имеет право слать ТОЛЬКО в столицы
+            if "SPB" in target_part: targets.append("SPB")
+            if "MSK" in target_part: targets.append("MSK")
+            
+        elif "locatorru" in source_lower:
+            # Локатор имеет право слать ТОЛЬКО в приграничье
+            if "BELGOROD" in target_part: targets.append("BELGOROD")
+            if "KURSK" in target_part: targets.append("KURSK")
+            
+        elif "radar_ru_belgorod" in source_lower:
+            # Резервный радар имеет право слать ТОЛЬКО в Белгород
+            if "BELGOROD" in target_part: targets.append("BELGOROD")
 
-    # Рассылаем во все определенные регионы
+    # Рассылаем во все разрешенные регионы
     for region in targets:
         await loop.run_in_executor(None, send_to_channel, region, clean_text)
         print(f"[+] Успешно отправлено в {region}!")
@@ -133,15 +141,14 @@ async def main():
     print("=======================================")
     await app.start()
     
-    # --- НАЧАЛО ФИКСА ОШИБКИ PEER ID ---
+    # Синхронизация для предотвращения ошибки Peer ID
     print("[*] Синхронизирую подписки с сервером Телеграма...")
     try:
         async for dialog in app.get_dialogs():
-            pass # Просто пролистываем, чтобы юзербот сохранил всё в базу
+            pass 
         print("[+] Синхронизация каналов прошла успешно!")
     except Exception as e:
         print(f"[-] Небольшая заминка при синхронизации: {e}")
-    # --- КОНЕЦ ФИКСА ---
 
     from pyrogram import idle
     await idle()
