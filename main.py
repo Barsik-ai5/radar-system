@@ -25,7 +25,7 @@ SOURCES = ["@vrv_radar", "@radar_ru_belgorod", "@locatorru"]
 
 genai.configure(api_key=GEMINI_API_KEY)
 # Используем flash для молниеносной скорости реакции
-model = genai.GenerativeModel('gemini-1.5-flash-latest')
+model = genai.GenerativeModel('gemini-3.8-flash')
 
 app = Client("radar_bot", session_string=SESSION_STRING, api_id=API_ID, api_hash=API_HASH)
 
