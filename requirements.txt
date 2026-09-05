@@ -2,3 +2,4 @@ pyrogram
 tgcrypto
 google-generativeai
 requests
+python-dotenv
