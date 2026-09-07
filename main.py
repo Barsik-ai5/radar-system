@@ -17,12 +17,11 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 BOTS = {
     "SPB": {"token": os.getenv("BOT_SPB"), "channel": "@RadarLO_SPB", "name": "Питер и Ленинградская область"},
-    "MSK": {"token": os.getenv("BOT_MSK"), "channel": "@Radar_MSK_OBL", "name": "Москва и область"},
-    "BELGOROD": {"token": os.getenv("BOT_BELGOROD"), "channel": "@Radar_Belgorod_Obl", "name": "Белгород и область"},
-    "KURSK": {"token": os.getenv("BOT_KURSK"), "channel": "@Radar_Kursk", "name": "Курск и область"}
+    "MSK": {"token": os.getenv("BOT_MSK"), "channel": "@Radar_MSK_OBL", "name": "Москва и Московская область"},
+    "BELGOROD": {"token": os.getenv("BOT_BELGOROD"), "channel": "@Radar_Belgorod_Obl", "name": "Белгород и Белгородская область"},
+    "KURSK": {"token": os.getenv("BOT_KURSK"), "channel": "@Radar_Kursk", "name": "Курск и Курская область"}
 }
 
-# Наши цели (без @)
 TARGET_SOURCES = ["vrv_radar", "radar_ru_belgorod", "locatorru"]
 
 genai.configure(api_key=GEMINI_API_KEY)
@@ -30,7 +29,6 @@ model = genai.GenerativeModel('gemini-3.8-flash')
 
 app = Client("radar_bot", session_string=SESSION_STRING, api_id=API_ID, api_hash=API_HASH)
 
-# Засекаем время старта сервера
 BOT_START_TIME = time.time()
 
 def send_to_channel(region, text):
@@ -52,7 +50,7 @@ def send_to_channel(region, text):
     try:
         requests.post(url, json=payload)
     except Exception as e:
-        print(f"Ошибка отправки в {region}: {e}")
+        print(f"Ошибка отправки в {region}: {e}", flush=True)
 
 def process_with_ai(text, source):
     prompt = f"""
@@ -62,13 +60,16 @@ def process_with_ai(text, source):
 
 Правила:
 1. Если это общие слова, фразы "угроза сохраняется", сборы средств, реклама или пожелания ночи — верни только одно слово: ИГНОР.
-2. ВАЖНО: Фразы "авиационная", "бомбовая", "опасность по БПЛА", "ракетная", "атака", "приготовиться" — это РЕАЛЬНАЯ ТРЕВОГА. Перепиши суть коротко, используя эмодзи 🔴, 🟡, 🟢.
-3. ОПРЕДЕЛИ РЕГИОН и напиши его тег в самом начале (если регионов несколько, напиши все нужные теги):
-   - Если Питер/Ленобласть -> [SPB]
-   - Если Москва/МО -> [MSK]
-   - Если Белгородская обл -> [BELGOROD]
-   - Если Курск/Курская обл -> [KURSK]
-4. Верни ТОЛЬКО тег(и) и готовый текст. Никаких других слов.
+2. ЭМОДЗИ (ВЫБЕРИ СТРОГО ОДИН):
+   🔴 — Ракетная опасность, прямая атака, фиксация/сбитие, Пуски с авиации, Авиационная атака.
+   🟡 — Опасность БПЛА (желтый уровень, движение БПЛА, приготовиться, внимание).
+   🟢 — Отбой тревоги.
+3. ТЕГ РЕГИОНА (ОБЯЗАТЕЛЬНО СТАВЬ В НАЧАЛО):
+   - Питер/Ленобласть -> [SPB]
+   - Москва/МО -> [MSK]
+   - Белгородская обл (Валуйки, Шебекино и т.д.) -> [BELGOROD]
+   - Курск/Курская обл -> [KURSK]
+4. ФОРМАТ ОТВЕТА СТРОГО ТАКОЙ: [ТЕГ] [ЭМОДЗИ] Суть угрозы коротко.
 """
     for attempt in range(3):
         try:
@@ -77,10 +78,10 @@ def process_with_ai(text, source):
         except Exception as e:
             error_msg = str(e)
             if "429" in error_msg or "quota" in error_msg.lower():
-                print(f"[-] Гугл просит подождать (лимит 429). Сплю 35 секунд и пробую снова... (Попытка {attempt + 1}/3)")
+                print(f"[-] Гугл просит подождать (лимит 429). Сплю 35 секунд... (Попытка {attempt + 1}/3)", flush=True)
                 time.sleep(35)
             else:
-                print(f"[-] Ошибка ИИ: {e}")
+                print(f"[-] Ошибка ИИ: {e}", flush=True)
                 return "ИГНОР"
     return "ИГНОР"
 
@@ -93,7 +94,6 @@ async def radar_handler(client, message):
     if not message.chat:
         return
 
-    # === РУЧНОЙ ФИЛЬТР КАНАЛОВ ===
     username = (message.chat.username or "").lower()
     title = (message.chat.title or "").lower()
     source_lower = username + " " + title
@@ -105,23 +105,20 @@ async def radar_handler(client, message):
             break
             
     if not is_our_target:
-        return # Это левый чат, выходим молча
+        return 
 
-    # === ЗАЩИТА ОТ СПАМА ПРИ РЕСТАРТЕ (БЕЗ ЧАСОВЫХ ПОЯСОВ) ===
-    # Если бот только что запустился (прошло меньше 7 секунд) - игнорируем кэш
     if time.time() - BOT_START_TIME < 7:
-        print(f"[-] Отсекли старый кэш из {username or title} при рестарте.")
+        print(f"[-] Отсекли старый кэш из {username or title} при рестарте.", flush=True)
         return
 
-    # --- СЮДА ПРОЙДЕТ ТОЛЬКО 100% НОВЫЙ ПОСТ ---
     source_name = message.chat.username or message.chat.title or "Unknown"
-    print(f"[*] Получено СВЕЖЕЕ сообщение из {source_name}. Передаю нейросети...")
+    print(f"[*] Получено СВЕЖЕЕ сообщение из {source_name}. Передаю нейросети...", flush=True)
     
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, process_with_ai, text, source_name)
     
     if "ИГНОР" in result.upper():
-        print("[-] Мусор отфильтрован (ИГНОР).")
+        print(f"[-] Мусор отфильтрован из {source_name} (ИГНОР).", flush=True)
         return
         
     # --- ЖЕСТКАЯ МАРШРУТИЗАЦИЯ ---
@@ -130,28 +127,29 @@ async def radar_handler(client, message):
     elif "vrv" in source_lower:
         allowed_regions = ["SPB", "MSK"]
     else:
-        allowed_regions = ["BELGOROD"] # Для radar_ru_belgorod
+        allowed_regions = ["BELGOROD"] 
 
     clean_text = result
     for r in BOTS.keys():
         clean_text = clean_text.replace(f"[{r}]", "").strip()
 
+    # УБРАЛИ ХАК со слепой отправкой. Теперь СТРОГО по тегам от нейросети!
     for region in allowed_regions:
-        if len(allowed_regions) == 1 or f"[{region}]" in result:
+        if f"[{region}]" in result:
             await loop.run_in_executor(None, send_to_channel, region, clean_text)
-            print(f"[+] Успешно отправлено в {region}!")
+            print(f"[+] Успешно отправлено в {region}!", flush=True)
 
 async def main():
-    print("=======================================")
-    print("[*] Диспетчер ИИ-Радара УСПЕШНО ЗАПУЩЕН")
-    print("=======================================")
+    print("=======================================", flush=True)
+    print("[*] Диспетчер ИИ-Радара УСПЕШНО ЗАПУЩЕН", flush=True)
+    print("=======================================", flush=True)
     await app.start()
     
-    print("[*] Синхронизирую подписки с сервером Телеграма (можно игнорировать)...")
+    print("[*] Синхронизирую подписки с сервером Телеграма (можно игнорировать)...", flush=True)
     try:
         async for dialog in app.get_dialogs():
             pass 
-        print("[+] Синхронизация завершена.")
+        print("[+] Синхронизация завершена.", flush=True)
     except Exception as e:
         pass 
 
