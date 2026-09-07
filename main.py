@@ -2,7 +2,7 @@ import os
 import asyncio
 import requests
 import time
-from pyrogram import Client, filters
+from pyrogram import Client
 import google.generativeai as genai
 from dotenv import load_dotenv
 
@@ -22,15 +22,14 @@ BOTS = {
     "KURSK": {"token": os.getenv("BOT_KURSK"), "channel": "@Radar_Kursk", "name": "Курск и область"}
 }
 
-# Включены все 3 источника
-SOURCES = ["@vrv_radar", "@radar_ru_belgorod", "@locatorru"]
+# Наши цели (пишем без @, чтобы перехватывать наверняка)
+TARGET_SOURCES = ["vrv_radar", "radar_ru_belgorod", "locatorru"]
 
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-3.8-flash')
 
 app = Client("radar_bot", session_string=SESSION_STRING, api_id=API_ID, api_hash=API_HASH)
 
-# === ЗАЩИТА ОТ СТАРОГО КЭША БЕЗ БАГОВ ЧАСОВЫХ ПОЯСОВ ===
 BOT_START_TIME = time.time()
 
 def send_to_channel(region, text):
@@ -62,7 +61,7 @@ def process_with_ai(text, source):
 
 Правила:
 1. Если это общие слова, фразы "угроза сохраняется", сборы средств, реклама или пожелания ночи — верни только одно слово: ИГНОР.
-2. ВАЖНО: Фразы "опасность по БПЛА", "ракетная опасность", "атака", "приготовиться" — это РЕАЛЬНАЯ ТРЕВОГА. Перепиши суть коротко, используя эмодзи 🔴, 🟡, 🟢.
+2. ВАЖНО: Фразы "авиационная", "бомбовая", "опасность по БПЛА", "ракетная", "атака", "приготовиться" — это РЕАЛЬНАЯ ТРЕВОГА. Перепиши суть коротко, используя эмодзи 🔴, 🟡, 🟢.
 3. ОПРЕДЕЛИ РЕГИОН и напиши его тег в самом начале (если регионов несколько, напиши все нужные теги):
    - Если Питер/Ленобласть -> [SPB]
    - Если Москва/МО -> [MSK]
@@ -84,40 +83,60 @@ def process_with_ai(text, source):
                 return "ИГНОР"
     return "ИГНОР"
 
-@app.on_message(filters.chat(SOURCES))
+# УБРАЛИ КРИВОЙ ФИЛЬТР ТЕЛЕГРАМА. ТЕПЕРЬ ЛОВИМ ВСЁ И ФИЛЬТРУЕМ САМИ!
+@app.on_message()
 async def radar_handler(client, message):
     text = message.text or message.caption or ""
     if not text:
         return 
 
-    # Если с момента запуска скрипта прошло меньше 10 секунд - игнорим (защита от спама кэшем при рестарте)
-    if time.time() - BOT_START_TIME < 10:
+    # Даем боту 5 секунд после запуска прийти в себя (не читаем старый кэш)
+    if time.time() - BOT_START_TIME < 5:
         return
 
-    source = message.chat.username or message.chat.title or ""
-    source_lower = source.lower()
-    
-    print(f"[*] Получено сообщение из {source}. Передаю нейросети...")
+    # Защита от системных уведомлений
+    if not message.chat:
+        return
+
+    # Собираем инфу о канале (юзернейм и название)
+    username = (message.chat.username or "").lower()
+    title = (message.chat.title or "").lower()
+    source_lower = username + " " + title
+
+    # РУЧНОЙ ПЕРЕХВАТ: Проверяем, наш ли это радар
+    is_our_target = False
+    for target in TARGET_SOURCES:
+        if target in source_lower:
+            is_our_target = True
+            break
+            
+    if not is_our_target:
+        return # Это левый чат, выходим молча, не спамим в логи
+
+    # --- ЕСЛИ ДОШЛИ СЮДА, ЗНАЧИТ ЭТО БОЕВОЙ ПОСТ ИЗ НАШИХ РАДАРОВ ---
+    source_name = message.chat.username or message.chat.title or "Unknown"
+    print(f"[*] Получено сообщение из {source_name}. Передаю нейросети...")
     
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, process_with_ai, text, source)
+    result = await loop.run_in_executor(None, process_with_ai, text, source_name)
     
     if "ИГНОР" in result.upper():
         print("[-] Мусор отфильтрован (ИГНОР).")
         return
         
-    # --- ЖЕСТКАЯ МАРШРУТИЗАЦИЯ ИСТОЧНИКОВ ---
+    # --- ЖЕСТКАЯ МАРШРУТИЗАЦИЯ ---
     if "locator" in source_lower:
         allowed_regions = ["KURSK"]
     elif "vrv" in source_lower:
         allowed_regions = ["SPB", "MSK"]
     else:
-        allowed_regions = ["BELGOROD"] # для radar_ru_belgorod
+        allowed_regions = ["BELGOROD"] # Для radar_ru_belgorod
 
     clean_text = result
     for r in BOTS.keys():
         clean_text = clean_text.replace(f"[{r}]", "").strip()
 
+    # Отправляем
     for region in allowed_regions:
         if len(allowed_regions) == 1 or f"[{region}]" in result:
             await loop.run_in_executor(None, send_to_channel, region, clean_text)
@@ -129,13 +148,13 @@ async def main():
     print("=======================================")
     await app.start()
     
-    print("[*] Синхронизирую подписки с сервером Телеграма...")
+    print("[*] Синхронизирую подписки с сервером Телеграма (можно игнорировать)...")
     try:
         async for dialog in app.get_dialogs():
             pass 
-        print("[+] Синхронизация каналов прошла успешно!")
+        print("[+] Синхронизация завершена.")
     except Exception as e:
-        print(f"[-] Небольшая заминка при синхронизации: {e}")
+        pass # Глушим ошибку, она нам больше не страшна!
 
     from pyrogram import idle
     await idle()
