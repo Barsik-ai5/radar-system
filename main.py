@@ -17,9 +17,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 BOTS = {
     "SPB": {"token": os.getenv("BOT_SPB"), "channel": "@RadarLO_SPB", "name": "Питер и Ленинградская область"},
-    "MSK": {"token": os.getenv("BOT_MSK"), "channel": "@Radar_MSK_OBL", "name": "Москва и Московская область"},
-    "BELGOROD": {"token": os.getenv("BOT_BELGOROD"), "channel": "@Radar_Belgorod_Obl", "name": "Белгород и Белгородская область"},
-    "KURSK": {"token": os.getenv("BOT_KURSK"), "channel": "@Radar_Kursk", "name": "Курск и Курская область"}
+    "MSK": {"token": os.getenv("BOT_MSK"), "channel": "@Radar_MSK_OBL", "name": "Москва и область"},
+    "BELGOROD": {"token": os.getenv("BOT_BELGOROD"), "channel": "@Radar_Belgorod_Obl", "name": "Белгород и область"},
+    "KURSK": {"token": os.getenv("BOT_KURSK"), "channel": "@Radar_Kursk", "name": "Курск и область"}
 }
 
 TARGET_SOURCES = ["vrv_radar", "radar_ru_belgorod", "locatorru"]
@@ -53,7 +53,7 @@ def send_to_channel(region, text):
         print(f"Ошибка отправки в {region}: {e}", flush=True)
 
 def process_with_ai(text, source):
-prompt = f"""
+    prompt = f"""
 Ты — строгий военный фильтр радара. Проанализируй текст.
 Источник: {source}
 Текст: {text}
@@ -123,7 +123,7 @@ async def radar_handler(client, message):
         
     # --- ЖЕСТКАЯ МАРШРУТИЗАЦИЯ ---
     if "locator" in source_lower:
-        allowed_regions = ["KURSK"]
+        allowed_regions = ["BELGOROD", "KURSK"] # Локатор льет в Белгород и Курск
     elif "vrv" in source_lower:
         allowed_regions = ["SPB", "MSK"]
     else:
@@ -133,7 +133,7 @@ async def radar_handler(client, message):
     for r in BOTS.keys():
         clean_text = clean_text.replace(f"[{r}]", "").strip()
 
-    # УБРАЛИ ХАК со слепой отправкой. Теперь СТРОГО по тегам от нейросети!
+    # СТРОГАЯ ОТПРАВКА ПО ТЕГАМ
     for region in allowed_regions:
         if f"[{region}]" in result:
             await loop.run_in_executor(None, send_to_channel, region, clean_text)
@@ -145,7 +145,7 @@ async def main():
     print("=======================================", flush=True)
     await app.start()
     
-    print("[*] Синхронизирую подписки с сервером Телеграма (можно игнорировать)...", flush=True)
+    print("[*] Синхронизирую подписки с сервером Телеграма...", flush=True)
     try:
         async for dialog in app.get_dialogs():
             pass 
@@ -159,3 +159,4 @@ async def main():
 
 if __name__ == "__main__":
     app.run(main())
+    
