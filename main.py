@@ -38,7 +38,6 @@ def send_to_channel(region, text):
     url = f"https://api.telegram.org/bot{bot_info['token']}/sendMessage"
     channel_link = f"https://t.me/{bot_info['channel'].replace('@', '')}"
     
-    # Чистый текст и аккуратная ссылка
     final_text = f"{text}\n\n📍 Радар {bot_info['name']} | <a href='{channel_link}'>Подписаться</a>"
     
     payload = {
@@ -68,7 +67,6 @@ def process_with_ai(text, source):
    - Если Курск/Курская обл -> [KURSK]
 4. Верни ТОЛЬКО тег(и) и готовый текст. Никаких других слов.
 """
-    # === БРОНЯ ОТ ОШИБКИ 429 ===
     for attempt in range(3):
         try:
             response = model.generate_content(prompt)
@@ -88,6 +86,13 @@ async def radar_handler(client, message):
     text = message.text or message.caption or ""
     if not text:
         return 
+
+    # === ИГНОРИРОВАНИЕ СТАРОЙ ИСТОРИИ ПРИ РЕСТАРТЕ ===
+    if message.date:
+        # Если сообщению больше 5 минут (300 секунд), просто забиваем на него
+        if (time.time() - message.date.timestamp()) > 300:
+            print("[-] Пропущено старое сообщение (история при рестарте).")
+            return
 
     source = message.chat.username or message.chat.title or ""
     source_lower = source.lower()
@@ -109,14 +114,12 @@ async def radar_handler(client, message):
     else:
         allowed_regions = ["BELGOROD"] # для radar_ru_belgorod
 
-    # Очищаем финальный текст от тегов
     clean_text = result
     for r in BOTS.keys():
         clean_text = clean_text.replace(f"[{r}]", "").strip()
 
     # Отправляем в каналы
     for region in allowed_regions:
-        # Отправляем 100%, если у источника только 1 регион, либо если есть нужный тег
         if len(allowed_regions) == 1 or f"[{region}]" in result:
             await loop.run_in_executor(None, send_to_channel, region, clean_text)
             print(f"[+] Успешно отправлено в {region}!")
