@@ -30,6 +30,9 @@ model = genai.GenerativeModel('gemini-3.8-flash')
 
 app = Client("radar_bot", session_string=SESSION_STRING, api_id=API_ID, api_hash=API_HASH)
 
+# === ЗАЩИТА ОТ СТАРОГО КЭША БЕЗ БАГОВ ЧАСОВЫХ ПОЯСОВ ===
+BOT_START_TIME = time.time()
+
 def send_to_channel(region, text):
     bot_info = BOTS.get(region)
     if not bot_info or not bot_info["token"]:
@@ -59,7 +62,7 @@ def process_with_ai(text, source):
 
 Правила:
 1. Если это общие слова, фразы "угроза сохраняется", сборы средств, реклама или пожелания ночи — верни только одно слово: ИГНОР.
-2. ВАЖНО: Фразы "опасность по БПЛА", "ракетная опасность", "атака" — это РЕАЛЬНАЯ ТРЕВОГА. Перепиши суть коротко, используя эмодзи 🔴, 🟡, 🟢.
+2. ВАЖНО: Фразы "опасность по БПЛА", "ракетная опасность", "атака", "приготовиться" — это РЕАЛЬНАЯ ТРЕВОГА. Перепиши суть коротко, используя эмодзи 🔴, 🟡, 🟢.
 3. ОПРЕДЕЛИ РЕГИОН и напиши его тег в самом начале (если регионов несколько, напиши все нужные теги):
    - Если Питер/Ленобласть -> [SPB]
    - Если Москва/МО -> [MSK]
@@ -87,12 +90,9 @@ async def radar_handler(client, message):
     if not text:
         return 
 
-    # === ИГНОРИРОВАНИЕ СТАРОЙ ИСТОРИИ ПРИ РЕСТАРТЕ ===
-    if message.date:
-        # Если сообщению больше 5 минут (300 секунд), просто забиваем на него
-        if (time.time() - message.date.timestamp()) > 300:
-            print("[-] Пропущено старое сообщение (история при рестарте).")
-            return
+    # Если с момента запуска скрипта прошло меньше 10 секунд - игнорим (защита от спама кэшем при рестарте)
+    if time.time() - BOT_START_TIME < 10:
+        return
 
     source = message.chat.username or message.chat.title or ""
     source_lower = source.lower()
@@ -118,7 +118,6 @@ async def radar_handler(client, message):
     for r in BOTS.keys():
         clean_text = clean_text.replace(f"[{r}]", "").strip()
 
-    # Отправляем в каналы
     for region in allowed_regions:
         if len(allowed_regions) == 1 or f"[{region}]" in result:
             await loop.run_in_executor(None, send_to_channel, region, clean_text)
