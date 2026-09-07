@@ -30,6 +30,9 @@ model = genai.GenerativeModel('gemini-3.8-flash')
 
 app = Client("radar_bot", session_string=SESSION_STRING, api_id=API_ID, api_hash=API_HASH)
 
+# Засекаем время старта сервера
+BOT_START_TIME = time.time()
+
 def send_to_channel(region, text):
     bot_info = BOTS.get(region)
     if not bot_info or not bot_info["token"]:
@@ -81,19 +84,11 @@ def process_with_ai(text, source):
                 return "ИГНОР"
     return "ИГНОР"
 
-# Ловим вообще всё, но фильтруем головой
 @app.on_message()
 async def radar_handler(client, message):
     text = message.text or message.caption or ""
     if not text:
         return 
-
-    # === ЖЕСТКАЯ ЗАЩИТА ОТ СТАРОЙ ИСТОРИИ ===
-    if message.date:
-        # Если сообщению больше 2 минут (120 секунд) - молча выкидываем его.
-        # Это спасет Гугл от спама при рестарте бота.
-        if (time.time() - message.date.timestamp()) > 120:
-            return 
 
     if not message.chat:
         return
@@ -112,7 +107,13 @@ async def radar_handler(client, message):
     if not is_our_target:
         return # Это левый чат, выходим молча
 
-    # --- ЕСЛИ ДОШЛИ СЮДА - ЭТО СВЕЖАЯ ТРЕВОГА ИЗ НАШИХ РАДАРОВ ---
+    # === ЗАЩИТА ОТ СПАМА ПРИ РЕСТАРТЕ (БЕЗ ЧАСОВЫХ ПОЯСОВ) ===
+    # Если бот только что запустился (прошло меньше 7 секунд) - игнорируем кэш
+    if time.time() - BOT_START_TIME < 7:
+        print(f"[-] Отсекли старый кэш из {username or title} при рестарте.")
+        return
+
+    # --- СЮДА ПРОЙДЕТ ТОЛЬКО 100% НОВЫЙ ПОСТ ---
     source_name = message.chat.username or message.chat.title or "Unknown"
     print(f"[*] Получено СВЕЖЕЕ сообщение из {source_name}. Передаю нейросети...")
     
@@ -135,7 +136,6 @@ async def radar_handler(client, message):
     for r in BOTS.keys():
         clean_text = clean_text.replace(f"[{r}]", "").strip()
 
-    # Отправка
     for region in allowed_regions:
         if len(allowed_regions) == 1 or f"[{region}]" in result:
             await loop.run_in_executor(None, send_to_channel, region, clean_text)
