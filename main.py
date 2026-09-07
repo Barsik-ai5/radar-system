@@ -17,7 +17,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 BOTS = {
     "SPB": {"token": os.getenv("BOT_SPB"), "channel": "@RadarLO_SPB", "name": "Питер и Ленинградская область"},
     "MSK": {"token": os.getenv("BOT_MSK"), "channel": "@Radar_MSK_OBL", "name": "Москва и Московская область"},
-    "BELGOROD": {"token": os.getenv("BOT_BELGOROD"), "channel": "@Radar_Belgorod_Obl", "name": "Белгород и Белгородская область область"},
+    "BELGOROD": {"token": os.getenv("BOT_BELGOROD"), "channel": "@Radar_Belgorod_Obl", "name": "Белгород и Белгородская область"},
     "KURSK": {"token": os.getenv("BOT_KURSK"), "channel": "@Radar_Kursk", "name": "Курск и Курская область"}
 }
 
@@ -38,7 +38,7 @@ def send_to_channel(region, text):
     channel_link = f"https://t.me/{bot_info['channel'].replace('@', '')}"
     
     # Текст сообщения + твоя надпись со вшитой ссылкой (никаких кнопок внизу)
-    final_text = f"{text}\n\n📍 Радар {bot_info['name']} | <a href='{channel_link}'>Подписаться</a>"
+    final_text = f"{text}\n\n📡 Радар {bot_info['name']} | <a href='{channel_link}'>Подписаться</a>"
     
     payload = {
         "chat_id": bot_info['channel'],
@@ -93,14 +93,13 @@ async def radar_handler(client, message):
         print("[-] Мусор отфильтрован (ИГНОР).")
         return
         
-    # --- ЖЕСТКАЯ МАРШРУТИЗАЦИЯ ИСТОЧНИКОВ ---
+# --- ЖЕСТКАЯ МАРШРУТИЗАЦИЯ ИСТОЧНИКОВ ---
     if "locator" in source_lower:
-        allowed_regions = ["BELGOROD", "KURSK"]
+        allowed_regions = ["KURSK"]  # Локатор теперь льет ТОЛЬКО в Курск
     elif "vrv" in source_lower:
         allowed_regions = ["SPB", "MSK"]
     else:
-        allowed_regions = ["BELGOROD"] # для radar_ru_belgorod
-
+        allowed_regions = ["BELGOROD"] # radar_ru_belgorod льет ТОЛЬКО в Белгород
     # Очищаем финальный текст от всех возможных тегов, чтобы в канал ушел чистый текст
     clean_text = result
     for r in BOTS.keys():
