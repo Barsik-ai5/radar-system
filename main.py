@@ -1,6 +1,7 @@
 import os
 import asyncio
 import requests
+import time
 from pyrogram import Client, filters
 import google.generativeai as genai
 from dotenv import load_dotenv
@@ -10,21 +11,21 @@ load_dotenv()
 API_ID = 36567125
 API_HASH = "74f27c0240ce52057f170f7b119d74f3"
 
-# Получаем секреты из настроек сервера (чтобы никто их не украл)
+# Получаем секреты из настроек сервера
 SESSION_STRING = os.getenv("SESSION_STRING")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 BOTS = {
     "SPB": {"token": os.getenv("BOT_SPB"), "channel": "@RadarLO_SPB", "name": "Питер и Ленинградская область"},
-    "MSK": {"token": os.getenv("BOT_MSK"), "channel": "@Radar_MSK_OBL", "name": "Москва и Московская область"},
-    "BELGOROD": {"token": os.getenv("BOT_BELGOROD"), "channel": "@Radar_Belgorod_Obl", "name": "Белгород и Белгородская область"},
-    "KURSK": {"token": os.getenv("BOT_KURSK"), "channel": "@Radar_Kursk", "name": "Курск и Курская область"}
+    "MSK": {"token": os.getenv("BOT_MSK"), "channel": "@Radar_MSK_OBL", "name": "Москва и область"},
+    "BELGOROD": {"token": os.getenv("BOT_BELGOROD"), "channel": "@Radar_Belgorod_Obl", "name": "Белгород и область"},
+    "KURSK": {"token": os.getenv("BOT_KURSK"), "channel": "@Radar_Kursk", "name": "Курск и область"}
 }
 
+# Включены все 3 источника
 SOURCES = ["@vrv_radar", "@radar_ru_belgorod", "@locatorru"]
 
 genai.configure(api_key=GEMINI_API_KEY)
-# Используем flash для молниеносной скорости реакции
 model = genai.GenerativeModel('gemini-3.8-flash')
 
 app = Client("radar_bot", session_string=SESSION_STRING, api_id=API_ID, api_hash=API_HASH)
@@ -37,8 +38,8 @@ def send_to_channel(region, text):
     url = f"https://api.telegram.org/bot{bot_info['token']}/sendMessage"
     channel_link = f"https://t.me/{bot_info['channel'].replace('@', '')}"
     
-    # Текст сообщения + твоя надпись со вшитой ссылкой (никаких кнопок внизу)
-    final_text = f"{text}\n\n📡 Радар {bot_info['name']} | <a href='{channel_link}'>Подписаться</a>"
+    # Чистый текст и аккуратная ссылка
+    final_text = f"{text}\n\n📍 Радар {bot_info['name']} | <a href='{channel_link}'>Подписаться</a>"
     
     payload = {
         "chat_id": bot_info['channel'],
@@ -50,6 +51,7 @@ def send_to_channel(region, text):
         requests.post(url, json=payload)
     except Exception as e:
         print(f"Ошибка отправки в {region}: {e}")
+
 def process_with_ai(text, source):
     prompt = f"""
 Ты — строгий военный фильтр радара. Проанализируй текст.
@@ -66,12 +68,20 @@ def process_with_ai(text, source):
    - Если Курск/Курская обл -> [KURSK]
 4. Верни ТОЛЬКО тег(и) и готовый текст. Никаких других слов.
 """
-    try:
-        response = model.generate_content(prompt)
-        return response.text.strip()
-    except Exception as e:
-        print(f"Ошибка ИИ: {e}")
-        return "ИГНОР"
+    # === БРОНЯ ОТ ОШИБКИ 429 ===
+    for attempt in range(3):
+        try:
+            response = model.generate_content(prompt)
+            return response.text.strip()
+        except Exception as e:
+            error_msg = str(e)
+            if "429" in error_msg or "quota" in error_msg.lower():
+                print(f"[-] Гугл просит подождать (лимит 429). Сплю 35 секунд и пробую снова... (Попытка {attempt + 1}/3)")
+                time.sleep(35)
+            else:
+                print(f"[-] Ошибка ИИ: {e}")
+                return "ИГНОР"
+    return "ИГНОР"
 
 @app.on_message(filters.chat(SOURCES))
 async def radar_handler(client, message):
@@ -99,15 +109,14 @@ async def radar_handler(client, message):
     else:
         allowed_regions = ["BELGOROD"] # для radar_ru_belgorod
 
-    # Очищаем финальный текст от тегов, чтобы в канал ушел чистый текст
+    # Очищаем финальный текст от тегов
     clean_text = result
     for r in BOTS.keys():
         clean_text = clean_text.replace(f"[{r}]", "").strip()
 
     # Отправляем в каналы
     for region in allowed_regions:
-        # ГЛАВНЫЙ ФИКС: Если у источника только 1 регион (Белгород или Курск) 
-        # ИЛИ если нейросеть поставила правильный тег (для Москвы/Питера) -> ОТПРАВЛЯЕМ!
+        # Отправляем 100%, если у источника только 1 регион, либо если есть нужный тег
         if len(allowed_regions) == 1 or f"[{region}]" in result:
             await loop.run_in_executor(None, send_to_channel, region, clean_text)
             print(f"[+] Успешно отправлено в {region}!")
