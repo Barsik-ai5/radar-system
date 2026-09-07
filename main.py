@@ -50,7 +50,6 @@ def send_to_channel(region, text):
         requests.post(url, json=payload)
     except Exception as e:
         print(f"Ошибка отправки в {region}: {e}")
-
 def process_with_ai(text, source):
     prompt = f"""
 Ты — строгий военный фильтр радара. Проанализируй текст.
@@ -59,13 +58,13 @@ def process_with_ai(text, source):
 
 Правила:
 1. Если это общие слова, фразы "угроза сохраняется", сборы средств, реклама или пожелания ночи — верни только одно слово: ИГНОР.
-2. Если это реальная угроза (летит, фиксация, опасность) или отбой — перепиши суть коротко и строго, используя эмодзи 🔴, 🟡, 🟢.
+2. ВАЖНО: Фразы "опасность по БПЛА", "ракетная опасность", "атака" — это РЕАЛЬНАЯ ТРЕВОГА. Перепиши суть коротко, используя эмодзи 🔴, 🟡, 🟢.
 3. ОПРЕДЕЛИ РЕГИОН и напиши его тег в самом начале (если регионов несколько, напиши все нужные теги):
    - Если Питер/Ленобласть -> [SPB]
    - Если Москва/МО -> [MSK]
-   - Если Белгородская обл (Белгород, Шебекино, Валуйки, Строитель, Майский и т.д.) -> [BELGOROD]
+   - Если Белгородская обл -> [BELGOROD]
    - Если Курск/Курская обл -> [KURSK]
-4. Верни ТОЛЬКО тег(и) и готовый текст. Никаких других слов и комментариев.
+4. Верни ТОЛЬКО тег(и) и готовый текст. Никаких других слов.
 """
     try:
         response = model.generate_content(prompt)
@@ -76,7 +75,6 @@ def process_with_ai(text, source):
 
 @app.on_message(filters.chat(SOURCES))
 async def radar_handler(client, message):
-    # Берем только текст, игнорируем тяжелые медиа
     text = message.text or message.caption or ""
     if not text:
         return 
@@ -93,21 +91,24 @@ async def radar_handler(client, message):
         print("[-] Мусор отфильтрован (ИГНОР).")
         return
         
-# --- ЖЕСТКАЯ МАРШРУТИЗАЦИЯ ИСТОЧНИКОВ ---
+    # --- ЖЕСТКАЯ МАРШРУТИЗАЦИЯ ИСТОЧНИКОВ ---
     if "locator" in source_lower:
-        allowed_regions = ["KURSK"]  # Локатор теперь льет ТОЛЬКО в Курск
+        allowed_regions = ["KURSK"]
     elif "vrv" in source_lower:
         allowed_regions = ["SPB", "MSK"]
     else:
-        allowed_regions = ["BELGOROD"] # radar_ru_belgorod льет ТОЛЬКО в Белгород
-    # Очищаем финальный текст от всех возможных тегов, чтобы в канал ушел чистый текст
+        allowed_regions = ["BELGOROD"] # для radar_ru_belgorod
+
+    # Очищаем финальный текст от тегов, чтобы в канал ушел чистый текст
     clean_text = result
     for r in BOTS.keys():
         clean_text = clean_text.replace(f"[{r}]", "").strip()
 
-    # Отправляем только в те каналы, за которые отвечает источник
+    # Отправляем в каналы
     for region in allowed_regions:
-        if f"[{region}]" in result:
+        # ГЛАВНЫЙ ФИКС: Если у источника только 1 регион (Белгород или Курск) 
+        # ИЛИ если нейросеть поставила правильный тег (для Москвы/Питера) -> ОТПРАВЛЯЕМ!
+        if len(allowed_regions) == 1 or f"[{region}]" in result:
             await loop.run_in_executor(None, send_to_channel, region, clean_text)
             print(f"[+] Успешно отправлено в {region}!")
 
@@ -117,15 +118,13 @@ async def main():
     print("=======================================")
     await app.start()
     
-    # --- НАЧАЛО ФИКСА ОШИБКИ PEER ID ---
     print("[*] Синхронизирую подписки с сервером Телеграма...")
     try:
         async for dialog in app.get_dialogs():
-            pass # Просто пролистываем, чтобы юзербот сохранил всё в базу
+            pass 
         print("[+] Синхронизация каналов прошла успешно!")
     except Exception as e:
         print(f"[-] Небольшая заминка при синхронизации: {e}")
-    # --- КОНЕЦ ФИКСА ---
 
     from pyrogram import idle
     await idle()
