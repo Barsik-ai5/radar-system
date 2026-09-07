@@ -22,15 +22,13 @@ BOTS = {
     "KURSK": {"token": os.getenv("BOT_KURSK"), "channel": "@Radar_Kursk", "name": "Курск и область"}
 }
 
-# Наши цели (пишем без @, чтобы перехватывать наверняка)
+# Наши цели (без @)
 TARGET_SOURCES = ["vrv_radar", "radar_ru_belgorod", "locatorru"]
 
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-3.8-flash')
 
 app = Client("radar_bot", session_string=SESSION_STRING, api_id=API_ID, api_hash=API_HASH)
-
-BOT_START_TIME = time.time()
 
 def send_to_channel(region, text):
     bot_info = BOTS.get(region)
@@ -83,27 +81,28 @@ def process_with_ai(text, source):
                 return "ИГНОР"
     return "ИГНОР"
 
-# УБРАЛИ КРИВОЙ ФИЛЬТР ТЕЛЕГРАМА. ТЕПЕРЬ ЛОВИМ ВСЁ И ФИЛЬТРУЕМ САМИ!
+# Ловим вообще всё, но фильтруем головой
 @app.on_message()
 async def radar_handler(client, message):
     text = message.text or message.caption or ""
     if not text:
         return 
 
-    # Даем боту 5 секунд после запуска прийти в себя (не читаем старый кэш)
-    if time.time() - BOT_START_TIME < 5:
-        return
+    # === ЖЕСТКАЯ ЗАЩИТА ОТ СТАРОЙ ИСТОРИИ ===
+    if message.date:
+        # Если сообщению больше 2 минут (120 секунд) - молча выкидываем его.
+        # Это спасет Гугл от спама при рестарте бота.
+        if (time.time() - message.date.timestamp()) > 120:
+            return 
 
-    # Защита от системных уведомлений
     if not message.chat:
         return
 
-    # Собираем инфу о канале (юзернейм и название)
+    # === РУЧНОЙ ФИЛЬТР КАНАЛОВ ===
     username = (message.chat.username or "").lower()
     title = (message.chat.title or "").lower()
     source_lower = username + " " + title
 
-    # РУЧНОЙ ПЕРЕХВАТ: Проверяем, наш ли это радар
     is_our_target = False
     for target in TARGET_SOURCES:
         if target in source_lower:
@@ -111,11 +110,11 @@ async def radar_handler(client, message):
             break
             
     if not is_our_target:
-        return # Это левый чат, выходим молча, не спамим в логи
+        return # Это левый чат, выходим молча
 
-    # --- ЕСЛИ ДОШЛИ СЮДА, ЗНАЧИТ ЭТО БОЕВОЙ ПОСТ ИЗ НАШИХ РАДАРОВ ---
+    # --- ЕСЛИ ДОШЛИ СЮДА - ЭТО СВЕЖАЯ ТРЕВОГА ИЗ НАШИХ РАДАРОВ ---
     source_name = message.chat.username or message.chat.title or "Unknown"
-    print(f"[*] Получено сообщение из {source_name}. Передаю нейросети...")
+    print(f"[*] Получено СВЕЖЕЕ сообщение из {source_name}. Передаю нейросети...")
     
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, process_with_ai, text, source_name)
@@ -136,7 +135,7 @@ async def radar_handler(client, message):
     for r in BOTS.keys():
         clean_text = clean_text.replace(f"[{r}]", "").strip()
 
-    # Отправляем
+    # Отправка
     for region in allowed_regions:
         if len(allowed_regions) == 1 or f"[{region}]" in result:
             await loop.run_in_executor(None, send_to_channel, region, clean_text)
@@ -154,7 +153,7 @@ async def main():
             pass 
         print("[+] Синхронизация завершена.")
     except Exception as e:
-        pass # Глушим ошибку, она нам больше не страшна!
+        pass 
 
     from pyrogram import idle
     await idle()
