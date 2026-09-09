@@ -12,7 +12,7 @@ load_dotenv()
 API_ID = 36567125
 API_HASH = "74f27c0240ce52057f170f7b119d74f3"
 
-# Получаем секреты из настроек сервера
+# Получаем секреты 
 SESSION_STRING = os.getenv("SESSION_STRING")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
@@ -29,7 +29,6 @@ genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-3.8-flash')
 
 ai_lock = asyncio.Lock()
-BOT_START_TIME = time.time()
 
 SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -69,7 +68,7 @@ def process_with_ai(text, source):
 
 Правила:
 1. Если это общие слова, фразы "угроза сохраняется", сборы средств, реклама или пожелания ночи — верни только одно слово: ИГНОР.
-2. ВАЖНО: Фразы "тревога", "опасность", "ФПВ", "FPV", "БПЛА", "ракетная", "атака", "ударные группы", "авиационная", "бомбовая", "фиксация", "ударный", "хорнет", "отбой" — это ВАЖНЫЕ СООБЩЕНИЯ. Перепиши суть коротко, используя эмодзи 🔴, 🟡 (для тревоги) и 🟢 (для отбоя). СООБЩЕНИЯ ОБ ОТБОЕ ПУБЛИКОВАТЬ ОБЯЗАТЕЛЬНО!
+2. ВАЖНО: Фразы "тревога", "опасность", "ФПВ", "FPV", "БПЛА", "ракетная", "атака", "ударные группы", "авиационная", "бомбовая", "фиксация", "ударный", "хорнет", "УАБ", "отбой" — это ВАЖНЫЕ СООБЩЕНИЯ. Перепиши суть коротко, используя эмодзи 🔴, 🟡 (для тревоги) и 🟢 (для отбоя). СООБЩЕНИЯ ОБ ОТБОЕ ПУБЛИКОВАТЬ ОБЯЗАТЕЛЬНО!
 3. ОПРЕДЕЛИ РЕГИОН. Мы отслеживаем ТОЛЬКО эти:
    - Питер/Ленобласть -> [SPB]
    - Москва/МО -> [MSK]
@@ -97,16 +96,10 @@ def process_with_ai(text, source):
 
 @app.on_message()
 async def radar_handler(client, message):
-    text = message.text or message.caption or ""
-    if not text:
-        return 
-
-    if time.time() - BOT_START_TIME < 45:
-        return 
-
     if not message.chat:
         return
 
+    # 1. Проверяем, наш ли это канал, чтобы не спамить в логи левые чаты
     username = (message.chat.username or "").lower()
     title = (message.chat.title or "").lower()
     source_lower = username + " " + title
@@ -121,9 +114,30 @@ async def radar_handler(client, message):
         return 
 
     source_name = message.chat.username or message.chat.title or "Unknown"
-    print(f"[*] ПОЙМАЛ СООБЩЕНИЕ ИЗ {source_name}. Жду очередь...")
+    
+    # === РЕНТГЕН ВКЛЮЧЕН: Теперь мы видим всё ===
+    print(f"[*] Засёк активность в радаре: {source_name}. Проверяю...")
+
+    text = message.text or message.caption or ""
+    if not text:
+        print("[-] В сообщении нет текста (только картинка/видео). Игнорирую.")
+        return 
+
+    # 2. Проверяем возраст сообщения
+    if message.date:
+        age = time.time() - message.date.timestamp()
+        if age > 7200:
+            print(f"[-] Сообщение слишком старое (возраст: {int(age)} секунд). Молча удаляю.")
+            return
+        else:
+            print(f"[+] Сообщение свежее (возраст: {int(age)} секунд). Пропускаю дальше!")
+
+    print(f"[*] Сообщение из {source_name} встало в очередь к ИИ...")
     
     async with ai_lock:
+        # Турникет-Дозатор (1 запрос раз в 4.5 секунды)
+        await asyncio.sleep(4.5)
+        
         print(f"[*] Отправляю в нейросеть: {source_name}...")
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, process_with_ai, text, source_name)
@@ -157,7 +171,7 @@ async def main():
     try:
         async for dialog in app.get_dialogs():
             pass 
-        print("[+] Синхронизация завершена.")
+        print("[+] Синхронизация завершена. Жду сообщений...")
     except Exception:
         pass 
 
