@@ -12,7 +12,6 @@ load_dotenv()
 API_ID = 36567125
 API_HASH = "74f27c0240ce52057f170f7b119d74f3"
 
-# Получаем секреты 
 SESSION_STRING = os.getenv("SESSION_STRING")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
@@ -25,8 +24,35 @@ BOTS = {
 
 TARGET_SOURCES = ["vrv_radar", "radar_ru_belgorod", "locatorru"]
 
+# === КЛЮЧЕВЫЕ СЛОВА ДЛЯ ПРЕДФИЛЬТРА ПИТОНА ===
+# Пишем корни слов (маленькими буквами), чтобы ловить любые окончания
+TARGET_KEYWORDS = [
+    # 🔴 БЕЛГОРОДСКАЯ ОБЛАСТЬ (города, районы, крупные ПГТ)
+    "белгород", "шебекин", "валуй", "грайворон", "оскол", "губкин",
+    "волоконов", "борисов", "ивня", "ракитн", "краснояруж", "алексеев",
+    "короч", "вейделев", "ровен", "чернян", "прохоров", "строител",
+    "октябрьск", "томаров", "тавров", "дубов", "майск", "разумн", "беломестн",
+    "стрелецк", "головчин", "бессонов", "красн",
+
+    # 🟡 КУРСКАЯ ОБЛАСТЬ
+    "курск", "курчат", "судж", "рыльск", "обоян", "льгов", "коренев",
+    "глушков", "беловск", "железногорск", "фатеж", "щигр", "дмитриев",
+    "тим", "горшечн", "поныр", "медвен", "золотухин", "мантуров", "солнцев",
+    "черемисин", "касторн", "пристен", "прямицын", "теткин",
+
+    # 🟢 МОСКВА И МО
+    "москв", "мск", "подмосков", "подольск", "люберц", "королев",
+    "химк", "балаших", "мытищ", "красногорск", "одинцов", "домодедов",
+    "зеленоград", "раменск", "ступин", "кашир", "коломн", "чехов", "серпухов",
+
+    # 🔵 ПИТЕР И ЛЕНОБЛАСТЬ
+    "петербург", "питер", "спб", "ленинград", "ленобласт",
+    "выборг", "гатчин", "кронштадт", "луг", "кингисепп", "волхов", "тихвин",
+    "всеволожск", "мурин", "кудров", "тосн"
+]
+
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-3.8-flash')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 ai_lock = asyncio.Lock()
 
@@ -99,7 +125,6 @@ async def radar_handler(client, message):
     if not message.chat:
         return
 
-    # 1. Проверяем, наш ли это канал, чтобы не спамить в логи левые чаты
     username = (message.chat.username or "").lower()
     title = (message.chat.title or "").lower()
     source_lower = username + " " + title
@@ -114,30 +139,36 @@ async def radar_handler(client, message):
         return 
 
     source_name = message.chat.username or message.chat.title or "Unknown"
-    
-    # === РЕНТГЕН ВКЛЮЧЕН: Теперь мы видим всё ===
     print(f"[*] Засёк активность в радаре: {source_name}. Проверяю...")
 
     text = message.text or message.caption or ""
     if not text:
-        print("[-] В сообщении нет текста (только картинка/видео). Игнорирую.")
         return 
 
-    # 2. Проверяем возраст сообщения
     if message.date:
         age = time.time() - message.date.timestamp()
         if age > 7200:
-            print(f"[-] Сообщение слишком старое (возраст: {int(age)} секунд). Молча удаляю.")
+            print(f"[-] Сообщение слишком старое (возраст: {int(age)} сек). Молча удаляю.")
             return
-        else:
-            print(f"[+] Сообщение свежее (возраст: {int(age)} секунд). Пропускаю дальше!")
 
-    print(f"[*] Сообщение из {source_name} встало в очередь к ИИ...")
+    # === ПРЕДФИЛЬТР ПИТОНА (СПАСАЕМ ГУГЛ ОТ СПАМА) ===
+    # Если это федеральный канал (locatorru или vrv_radar), проверяем текст перед отправкой ИИ
+    if "locator" in source_lower or "vrv" in source_lower:
+        text_lower = text.lower()
+        has_our_region = False
+        for kw in TARGET_KEYWORDS:
+            if kw in text_lower:
+                has_our_region = True
+                break
+                
+        if not has_our_region:
+            print(f"[-] Предфильтр: В посте из {source_name} чужой регион. Скип, бережем лимит!")
+            return # Выходим, не дергая Гугл!
+
+    print(f"[*] Сообщение прошло предфильтр. Встало в очередь к ИИ...")
     
     async with ai_lock:
-        # Турникет-Дозатор (1 запрос раз в 4.5 секунды)
         await asyncio.sleep(4.5)
-        
         print(f"[*] Отправляю в нейросеть: {source_name}...")
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, process_with_ai, text, source_name)
