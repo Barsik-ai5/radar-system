@@ -52,7 +52,7 @@ TARGET_KEYWORDS = [
 ]
 
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-3.8-flash')
 
 ai_lock = asyncio.Lock()
 
