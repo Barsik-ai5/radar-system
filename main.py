@@ -22,23 +22,22 @@ BOTS = {
     "KURSK": {"token": os.getenv("BOT_KURSK"), "channel": "@Radar_Kursk", "name": "Курск и область"}
 }
 
-# Наши цели 
 TARGET_SOURCES = ["vrv_radar", "radar_ru_belgorod", "locatorru"]
 
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-3.8-flash')
 
-app = Client("radar_bot", session_string=SESSION_STRING, api_id=API_ID, api_hash=API_HASH)
-
 ai_lock = asyncio.Lock()
+BOT_START_TIME = time.time()
 
-# === ОТКЛЮЧАЕМ ЦЕНЗУРУ ГУГЛА ===
 SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
 ]
+
+app = Client("radar_bot", session_string=SESSION_STRING, api_id=API_ID, api_hash=API_HASH)
 
 def send_to_channel(region, text):
     bot_info = BOTS.get(region)
@@ -69,7 +68,7 @@ def process_with_ai(text, source):
 
 Правила:
 1. Если это общие слова, фразы "угроза сохраняется", сборы средств, реклама или пожелания ночи — верни только одно слово: ИГНОР.
-2. ВАЖНО: Фразы "тревога", "опасность", "ФПВ", "FPV", "БПЛА", "ракетная", "атака", "ударные группы", "авиационная", "бомбовая", "фиксация" — это РЕАЛЬНАЯ ТРЕВОГА. Перепиши суть коротко, используя эмодзи 🔴, 🟡, 🟢.
+2. ВАЖНО: Фразы "тревога", "опасность", "ФПВ", "FPV", "БПЛА", "ракетная", "атака", "ударные группы", "авиационная", "бомбовая", "фиксация", "ударный", "хорнет" — это РЕАЛЬНАЯ ТРЕВОГА. Перепиши суть коротко, используя эмодзи 🔴, 🟡, 🟢.
 3. ОПРЕДЕЛИ РЕГИОН и напиши его тег в самом начале (если регионов несколько, напиши все нужные теги):
    - Если Питер/Ленобласть -> [SPB]
    - Если Москва/МО -> [MSK]
@@ -77,15 +76,14 @@ def process_with_ai(text, source):
    - Если Курск/Курская обл -> [KURSK]
 4. Верни ТОЛЬКО тег(и) и готовый текст. Никаких других слов.
 """
-    for attempt in range(4):
+    for attempt in range(3):
         try:
-            # Передаем Гуглу команду игнорировать цензуру
             response = model.generate_content(prompt, safety_settings=SAFETY_SETTINGS)
             return response.text.strip()
         except Exception as e:
             error_msg = str(e)
             if "429" in error_msg or "quota" in error_msg.lower():
-                print(f"[-] Гугл просит подождать (лимит 429). Сплю 35 секунд... (Попытка {attempt + 1}/4)")
+                print(f"[-] Гугл просит подождать (лимит 429). Сплю 35 секунд... (Попытка {attempt + 1}/3)")
                 time.sleep(35)
             elif "safety" in error_msg.lower():
                 print(f"[-] БЛОКИРОВКА ЦЕНЗУРЫ ГУГЛА! Ошибка: {e}")
@@ -101,15 +99,14 @@ async def radar_handler(client, message):
     if not text:
         return 
 
-    # Жесткая защита от старой истории (старше 2 минут - в мусор)
-    if message.date:
-        if (time.time() - message.date.timestamp()) > 120:
-            return 
+    # --- УСИЛЕННАЯ ГЛУШИЛКА ПРИ ЗАПУСКЕ (45 СЕКУНД) ---
+    # Не даст сжечь новый ключ Гугла историей из каналов
+    if time.time() - BOT_START_TIME < 45:
+        return 
 
     if not message.chat:
         return
 
-    # Проверка, наш ли это канал
     username = (message.chat.username or "").lower()
     title = (message.chat.title or "").lower()
     source_lower = username + " " + title
@@ -124,10 +121,10 @@ async def radar_handler(client, message):
         return 
 
     source_name = message.chat.username or message.chat.title or "Unknown"
-    print(f"[*] Сообщение из {source_name} встало в очередь к ИИ...")
+    print(f"[*] ПОЙМАЛ СООБЩЕНИЕ ИЗ {source_name}. Жду очередь...")
     
     async with ai_lock:
-        print(f"[*] Начинаю обработку сообщения из {source_name}...")
+        print(f"[*] Отправляю в нейросеть: {source_name}...")
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, process_with_ai, text, source_name)
     
@@ -135,7 +132,6 @@ async def radar_handler(client, message):
         print(f"[-] Мусор отфильтрован из {source_name} (ИГНОР).")
         return
         
-    # --- ЖЕСТКАЯ МАРШРУТИЗАЦИЯ ---
     if "locator" in source_lower:
         allowed_regions = ["KURSK"]
     elif "vrv" in source_lower:
@@ -147,7 +143,6 @@ async def radar_handler(client, message):
     for r in BOTS.keys():
         clean_text = clean_text.replace(f"[{r}]", "").strip()
 
-    # Отправка
     for region in allowed_regions:
         if len(allowed_regions) == 1 or f"[{region}]" in result:
             await loop.run_in_executor(None, send_to_channel, region, clean_text)
@@ -171,5 +166,4 @@ async def main():
     await app.stop()
 
 if __name__ == "__main__":
-    app.run(main())    
-    
+    app.run(main())
