@@ -22,6 +22,7 @@ BOTS = {
     "KURSK": {"token": os.getenv("BOT_KURSK"), "channel": "@Radar_Kursk", "name": "Курск и область"}
 }
 
+# Наши цели 
 TARGET_SOURCES = ["vrv_radar", "radar_ru_belgorod", "locatorru"]
 
 genai.configure(api_key=GEMINI_API_KEY)
@@ -29,7 +30,15 @@ model = genai.GenerativeModel('gemini-3.8-flash')
 
 app = Client("radar_bot", session_string=SESSION_STRING, api_id=API_ID, api_hash=API_HASH)
 
-BOT_START_TIME = time.time()
+ai_lock = asyncio.Lock()
+
+# === ОТКЛЮЧАЕМ ЦЕНЗУРУ ГУГЛА ===
+SAFETY_SETTINGS = [
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
+]
 
 def send_to_channel(region, text):
     bot_info = BOTS.get(region)
@@ -50,7 +59,7 @@ def send_to_channel(region, text):
     try:
         requests.post(url, json=payload)
     except Exception as e:
-        print(f"Ошибка отправки в {region}: {e}", flush=True)
+        print(f"Ошибка отправки в {region}: {e}")
 
 def process_with_ai(text, source):
     prompt = f"""
@@ -59,29 +68,30 @@ def process_with_ai(text, source):
 Текст: {text}
 
 Правила:
-1. Если это общие слова, фразы "угроза сохраняется", сборы средств, реклама, пожелания ночи, "учения", "проверка сирен", "плановые работы", "уничтожение боеприпасов" — верни только одно слово: ИГНОР.
-2. ЭМОДЗИ (ВЫБЕРИ СТРОГО ОДИН):
-   🔴 — Ракетная опасность, прямая атака, фиксация/сбитие, Пуски с авиации, Авиационная атака, Обстрел, РСЗО, баллистика, работа ПВО.
-   🟡 — Опасность БПЛА (желтый уровень, движение БПЛА, приготовиться, внимание), Авиационная опасность (без пусков).
-   🟢 — Отбой тревоги (отбой ракетной, отбой БПЛА, чисто).
-3. ТЕГ РЕГИОНА (ОБЯЗАТЕЛЬНО СТАВЬ В НАЧАЛО):
-   - Питер/Ленобласть -> [SPB]
-   - Москва/МО -> [MSK]
-   - Белгородская обл (Валуйки, Шебекино и т.д.) -> [BELGOROD]
-   - Курск/Курская обл -> [KURSK]
-4. ФОРМАТ ОТВЕТА СТРОГО ТАКОЙ: [ТЕГ] [ЭМОДЗИ] Суть угрозы коротко.
+1. Если это общие слова, фразы "угроза сохраняется", сборы средств, реклама или пожелания ночи — верни только одно слово: ИГНОР.
+2. ВАЖНО: Фразы "тревога", "опасность", "ФПВ", "FPV", "БПЛА", "ракетная", "атака", "ударные группы", "авиационная", "бомбовая", "фиксация" — это РЕАЛЬНАЯ ТРЕВОГА. Перепиши суть коротко, используя эмодзи 🔴, 🟡, 🟢.
+3. ОПРЕДЕЛИ РЕГИОН и напиши его тег в самом начале (если регионов несколько, напиши все нужные теги):
+   - Если Питер/Ленобласть -> [SPB]
+   - Если Москва/МО -> [MSK]
+   - Если Белгородская обл -> [BELGOROD]
+   - Если Курск/Курская обл -> [KURSK]
+4. Верни ТОЛЬКО тег(и) и готовый текст. Никаких других слов.
 """
-    for attempt in range(3):
+    for attempt in range(4):
         try:
-            response = model.generate_content(prompt)
+            # Передаем Гуглу команду игнорировать цензуру
+            response = model.generate_content(prompt, safety_settings=SAFETY_SETTINGS)
             return response.text.strip()
         except Exception as e:
             error_msg = str(e)
             if "429" in error_msg or "quota" in error_msg.lower():
-                print(f"[-] Гугл просит подождать (лимит 429). Сплю 35 секунд... (Попытка {attempt + 1}/3)", flush=True)
+                print(f"[-] Гугл просит подождать (лимит 429). Сплю 35 секунд... (Попытка {attempt + 1}/4)")
                 time.sleep(35)
+            elif "safety" in error_msg.lower():
+                print(f"[-] БЛОКИРОВКА ЦЕНЗУРЫ ГУГЛА! Ошибка: {e}")
+                return "ИГНОР"
             else:
-                print(f"[-] Ошибка ИИ: {e}", flush=True)
+                print(f"[-] Ошибка ИИ: {e}")
                 return "ИГНОР"
     return "ИГНОР"
 
@@ -91,9 +101,15 @@ async def radar_handler(client, message):
     if not text:
         return 
 
+    # Жесткая защита от старой истории (старше 2 минут - в мусор)
+    if message.date:
+        if (time.time() - message.date.timestamp()) > 120:
+            return 
+
     if not message.chat:
         return
 
+    # Проверка, наш ли это канал
     username = (message.chat.username or "").lower()
     title = (message.chat.title or "").lower()
     source_lower = username + " " + title
@@ -107,50 +123,47 @@ async def radar_handler(client, message):
     if not is_our_target:
         return 
 
-    if time.time() - BOT_START_TIME < 7:
-        print(f"[-] Отсекли старый кэш из {username or title} при рестарте.", flush=True)
-        return
-
     source_name = message.chat.username or message.chat.title or "Unknown"
-    print(f"[*] Получено СВЕЖЕЕ сообщение из {source_name}. Передаю нейросети...", flush=True)
+    print(f"[*] Сообщение из {source_name} встало в очередь к ИИ...")
     
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, process_with_ai, text, source_name)
+    async with ai_lock:
+        print(f"[*] Начинаю обработку сообщения из {source_name}...")
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, process_with_ai, text, source_name)
     
     if "ИГНОР" in result.upper():
-        print(f"[-] Мусор отфильтрован из {source_name} (ИГНОР).", flush=True)
+        print(f"[-] Мусор отфильтрован из {source_name} (ИГНОР).")
         return
         
     # --- ЖЕСТКАЯ МАРШРУТИЗАЦИЯ ---
     if "locator" in source_lower:
-        allowed_regions = ["BELGOROD", "KURSK"] # Локатор льет в Белгород и Курск
+        allowed_regions = ["KURSK"]
     elif "vrv" in source_lower:
         allowed_regions = ["SPB", "MSK"]
     else:
-        allowed_regions = ["BELGOROD"] 
+        allowed_regions = ["BELGOROD"]
 
     clean_text = result
     for r in BOTS.keys():
         clean_text = clean_text.replace(f"[{r}]", "").strip()
 
-    # СТРОГАЯ ОТПРАВКА ПО ТЕГАМ
+    # Отправка
     for region in allowed_regions:
-        if f"[{region}]" in result:
+        if len(allowed_regions) == 1 or f"[{region}]" in result:
             await loop.run_in_executor(None, send_to_channel, region, clean_text)
-            print(f"[+] Успешно отправлено в {region}!", flush=True)
+            print(f"[+] Успешно отправлено в {region}!")
 
 async def main():
-    print("=======================================", flush=True)
-    print("[*] Диспетчер ИИ-Радара УСПЕШНО ЗАПУЩЕН", flush=True)
-    print("=======================================", flush=True)
+    print("=======================================")
+    print("[*] Диспетчер ИИ-Радара УСПЕШНО ЗАПУЩЕН")
+    print("=======================================")
     await app.start()
     
-    print("[*] Синхронизирую подписки с сервером Телеграма...", flush=True)
     try:
         async for dialog in app.get_dialogs():
             pass 
-        print("[+] Синхронизация завершена.", flush=True)
-    except Exception as e:
+        print("[+] Синхронизация завершена.")
+    except Exception:
         pass 
 
     from pyrogram import idle
@@ -158,5 +171,5 @@ async def main():
     await app.stop()
 
 if __name__ == "__main__":
-    app.run(main())
+    app.run(main())    
     
