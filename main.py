@@ -2,6 +2,7 @@ import os
 import asyncio
 import requests
 import time
+import re  # <--- Добавили для жесткой вырезки любых тегов
 from pyrogram import Client
 import google.generativeai as genai
 from dotenv import load_dotenv
@@ -69,12 +70,13 @@ def process_with_ai(text, source):
 Правила:
 1. Если это общие слова, фразы "угроза сохраняется", сборы средств, реклама или пожелания ночи — верни только одно слово: ИГНОР.
 2. ВАЖНО: Фразы "тревога", "опасность", "ФПВ", "FPV", "БПЛА", "ракетная", "атака", "ударные группы", "авиационная", "бомбовая", "фиксация", "ударный", "хорнет" — это РЕАЛЬНАЯ ТРЕВОГА. Перепиши суть коротко, используя эмодзи 🔴, 🟡, 🟢.
-3. ОПРЕДЕЛИ РЕГИОН и напиши его тег в самом начале (если регионов несколько, напиши все нужные теги):
-   - Если Питер/Ленобласть -> [SPB]
-   - Если Москва/МО -> [MSK]
-   - Если Белгородская обл -> [BELGOROD]
-   - Если Курск/Курская обл -> [KURSK]
-4. Верни ТОЛЬКО тег(и) и готовый текст. Никаких других слов.
+3. ОПРЕДЕЛИ РЕГИОН. Мы отслеживаем ТОЛЬКО эти:
+   - Питер/Ленобласть -> [SPB]
+   - Москва/МО -> [MSK]
+   - Белгородская обл -> [BELGOROD]
+   - Курск/Курская обл -> [KURSK]
+   🚨 ВАЖНО: ЕСЛИ РЕГИОН ДРУГОЙ (например: Брянск, Воронеж, Ростов, Орел, Тула и т.д.) — строго верни ТОЛЬКО слово ИГНОР. Не придумывай новые теги!
+4. Верни ТОЛЬКО тег(и) и готовый текст.
 """
     for attempt in range(3):
         try:
@@ -99,8 +101,6 @@ async def radar_handler(client, message):
     if not text:
         return 
 
-    # --- УСИЛЕННАЯ ГЛУШИЛКА ПРИ ЗАПУСКЕ (45 СЕКУНД) ---
-    # Не даст сжечь новый ключ Гугла историей из каналов
     if time.time() - BOT_START_TIME < 45:
         return 
 
@@ -132,19 +132,22 @@ async def radar_handler(client, message):
         print(f"[-] Мусор отфильтрован из {source_name} (ИГНОР).")
         return
         
+    # --- ИСПРАВЛЕННАЯ МАРШРУТИЗАЦИЯ ---
+    force_send = False
     if "locator" in source_lower:
         allowed_regions = ["KURSK"]
+        # Локатор пишет про ВСЮ Россию, поэтому ТРЕБУЕМ наличие тега [KURSK]
     elif "vrv" in source_lower:
         allowed_regions = ["SPB", "MSK"]
     else:
         allowed_regions = ["BELGOROD"]
+        force_send = True # Радар Белгорода пишет только про себя, ему можно без тега
 
-    clean_text = result
-    for r in BOTS.keys():
-        clean_text = clean_text.replace(f"[{r}]", "").strip()
+    # Бронебойная зачистка ЛЮБЫХ тегов в квадратных скобках (типа [BRYANSK])
+    clean_text = re.sub(r'\[.*?\]\s*', '', result).strip()
 
     for region in allowed_regions:
-        if len(allowed_regions) == 1 or f"[{region}]" in result:
+        if force_send or f"[{region}]" in result:
             await loop.run_in_executor(None, send_to_channel, region, clean_text)
             print(f"[+] Успешно отправлено в {region}!")
 
