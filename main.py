@@ -19,8 +19,8 @@ SESSION_STRING = os.getenv("SESSION_STRING")
 # скрипт будет просто спать 65 секунд, как и раньше.
 GEMINI_KEYS = [
     os.getenv("GEMINI_API_KEY"),
-    "ТВОЙ_ВТОРОЙ_КЛЮЧ_СЮДА",
-    "ТВОЙ_ТРЕТИЙ_КЛЮЧ_СЮДА"
+    "",
+    ""
 ]
 # Скрипт сам уберет пустые заглушки
 GEMINI_KEYS = [k for k in GEMINI_KEYS if k and not k.startswith("ТВОЙ")]
@@ -68,7 +68,7 @@ TARGET_KEYWORDS = [
 ]
 
 # Примечание: Если 1.5-flash когда-нибудь снова выдаст ошибку 404, просто поменяй на 'gemini-pro'
-model = genai.GenerativeModel('gemini-3.8-flash')
+model = genai.GenerativeModel('gemini-3.5-flash-lite')
 
 ai_lock = asyncio.Lock()
 
