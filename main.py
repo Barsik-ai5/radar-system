@@ -106,7 +106,7 @@ def send_to_channel(region, text):
 def process_with_ai(text, source):
     global current_key_idx, model # Нужно для переключения ключа и модели
     
-    Prompt = f"""
+    prompt = f"""
 Ты — строгий военный фильтр радара. Проанализируй текст.
 Источник: {source}
 Текст: {text}
