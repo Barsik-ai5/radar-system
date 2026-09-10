@@ -13,7 +13,20 @@ API_ID = 36567125
 API_HASH = "74f27c0240ce52057f170f7b119d74f3"
 
 SESSION_STRING = os.getenv("SESSION_STRING")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# === 🔑 МУЛЬТИ-КЛЮЧИ (РОТАЦИЯ) ===
+# Впиши сюда свои дополнительные ключи. Если оставишь только один, 
+# скрипт будет просто спать 65 секунд, как и раньше.
+GEMINI_KEYS = [
+    os.getenv("GEMINI_API_KEY"),
+    "ТВОЙ_ВТОРОЙ_КЛЮЧ_СЮДА",
+    "ТВОЙ_ТРЕТИЙ_КЛЮЧ_СЮДА"
+]
+# Скрипт сам уберет пустые заглушки
+GEMINI_KEYS = [k for k in GEMINI_KEYS if k and not k.startswith("ТВОЙ")]
+
+current_key_idx = 0
+genai.configure(api_key=GEMINI_KEYS[current_key_idx])
 
 BOTS = {
     "SPB": {"token": os.getenv("BOT_SPB"), "channel": "@RadarLO_SPB", "name": "Питер и Ленинградская область"},
@@ -54,7 +67,6 @@ TARGET_KEYWORDS = [
     "полтав", "запуск", "взлет", "вылет", "пуск"
 ]
 
-genai.configure(api_key=GEMINI_API_KEY)
 # Примечание: Если 1.5-flash когда-нибудь снова выдаст ошибку 404, просто поменяй на 'gemini-pro'
 model = genai.GenerativeModel('gemini-3.8-flash')
 
@@ -92,6 +104,8 @@ def send_to_channel(region, text):
         print(f"Ошибка отправки в {region}: {e}")
 
 def process_with_ai(text, source):
+    global current_key_idx, model # Нужно для переключения ключа и модели
+    
     prompt = f"""
 Ты — строгий военный редактор радара "Дозор.ру". Твоя задача — проанализировать текст и сделать жесткий РЕРАЙТ по системе "СВЕТОФОР".
 Источник: {source}
@@ -119,9 +133,18 @@ def process_with_ai(text, source):
             return response.text.strip()
         except Exception as e:
             error_msg = str(e)
+            print(f"❗️ ДЕТАЛЬНАЯ ОШИБКА ГУГЛА: {repr(e)}") # Выводим чистую ошибку в консоль
+            
             if "429" in error_msg or "quota" in error_msg.lower():
-                print(f"[-] Гугл просит подождать (лимит 429). Сплю 65 секунд... (Попытка {attempt + 1}/3)")
-                time.sleep(65)
+                if len(GEMINI_KEYS) > 1:
+                    current_key_idx = (current_key_idx + 1) % len(GEMINI_KEYS)
+                    print(f"[*] Переключаюсь на резервный API-ключ №{current_key_idx + 1}...")
+                    genai.configure(api_key=GEMINI_KEYS[current_key_idx])
+                    model = genai.GenerativeModel('gemini-3.8-flash') # Перезапускаем модель с новым ключом
+                    time.sleep(1)
+                else:
+                    print(f"[-] Гугл просит подождать (лимит 429). Сплю 65 секунд... (Попытка {attempt + 1}/3)")
+                    time.sleep(65)
             elif "safety" in error_msg.lower():
                 print(f"[-] БЛОКИРОВКА ЦЕНЗУРЫ ГУГЛА! Ошибка: {e}")
                 return "ИГНОР"
@@ -205,6 +228,7 @@ async def radar_handler(client, message):
 async def main():
     print("=======================================")
     print("[*] Диспетчер ИИ-Радара УСПЕШНО ЗАПУЩЕН")
+    print(f"[*] Доступно API ключей: {len(GEMINI_KEYS)}")
     print("=======================================")
     await app.start()
     
