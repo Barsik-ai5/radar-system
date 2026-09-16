@@ -17,10 +17,25 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# === ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ДЛЯ НАБЛЮДАЕМОСТИ ===
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+log_queue = None
+main_loop = None
+stats_processed_count = 0
+
 # === ПРОФЕССИОНАЛЬНОЕ ЛОГИРОВАНИЕ ===
 def log_msg(level, tag, msg):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"{timestamp} [{level}] [{tag}] {msg}")
+    full_str = f"{timestamp} [{level}] [{tag}] {msg}"
+    print(full_str)
+    
+    # Мост между потоками для ERROR логов
+    if level == "ERROR" and ADMIN_CHAT_ID and log_queue is not None and main_loop is not None:
+        try:
+            main_loop.call_soon_threadsafe(log_queue.put_nowait, full_str)
+        except Exception as e:
+            # Строго print(), чтобы не уйти в рекурсию
+            print(f"Ошибка очереди логов: {e}")
 
 # === ПРОВЕРКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ===
 API_ID_RAW = os.getenv("API_ID")
@@ -102,7 +117,6 @@ def load_alerts_state():
 LAST_ALERT_IDS = load_alerts_state()
 PROCESSED_MESSAGES = {} 
 
-# === КЛЮЧЕВЫЕ СЛОВА ДЛЯ ПРЕДФИЛЬТРА И ЗАЩИТЫ ===
 TARGET_KEYWORDS = [
     "белгород", "шебекин", "валуй", "грайворон", "оскол", "губкин", "волоконов", "борисов", 
     "ивня", "ракитн", "краснояруж", "алексеев", "короч", "вейделев", "ровен", "чернян", 
@@ -119,7 +133,6 @@ TARGET_KEYWORDS = [
     "днепро", "днепропетровск", "харьков", "сумы", "авиаторск", "волчанск", "полтав", "отбой"
 ]
 
-# 🟡 ФИКС №5: Расширен список чужих регионов
 FOREIGN_REGIONS = [
     "воронеж", "брянск", "орел", "орлов", "липецк", "тул", "калуж", 
     "смоленск", "рязан", "твер", "ростов", "краснодар", "крым",
@@ -163,9 +176,14 @@ def sync_send_to_channel(region, text, reply_to=None, is_clear=False):
             response = requests.post(url, json=payload, timeout=15)
             
             if response.status_code == 200:
-                data = response.json()
-                if data.get("ok"):
-                    return data["result"]["message_id"]
+                try:
+                    data = response.json()
+                    if data.get("ok"):
+                        return data["result"]["message_id"]
+                    log_msg("ERROR", "TG", f"Telegram 200 OK, но ok=False: {data}")
+                except Exception as parse_err:
+                    log_msg("ERROR", "TG", f"Ошибка парсинга 200 OK: {parse_err}")
+                break 
                     
             elif response.status_code == 429:
                 try:
@@ -194,7 +212,7 @@ def sync_send_to_channel(region, text, reply_to=None, is_clear=False):
     return None
 
 def extract_region_text(result, region):
-    pattern = rf"\[{region}\]\s*(.*?)(?=\n\[(?:SPB|MSK|BELGOROD|KURSK)\]|\Z)"
+    pattern = rf"\[{region}\]\s*(.*?)(?=\n+\s*\[(?:SPB|MSK|BELGOROD|KURSK)\]|\Z)"
     match = re.search(pattern, result, re.IGNORECASE | re.DOTALL)
     if not match:
         return None
@@ -270,10 +288,10 @@ async def process_with_ai(text, source):
         except APIError as e:
             error_msg = str(e).lower()
             if "429" in error_msg or "quota" in error_msg:
-                log_msg("WARN", "AI", f"Лимит 429. Ожидание 65 сек... (Попытка {attempt + 1}/3)")
-                await asyncio.sleep(65)
+                log_msg("WARN", "AI", f"Лимит 429. Ожидание 30 сек... (Попытка {attempt + 1}/3)")
+                await asyncio.sleep(30)
                 continue 
-            elif "safety" in error_msg:
+            elif "safety" in error_msg or "blocked" in error_msg:
                 log_msg("WARN", "AI", f"Блокировка Safety: {e}")
                 return "ИГНОР"
             else:
@@ -293,7 +311,7 @@ async def save_alerts_state_async():
     async with state_lock:
         try:
             current_time = time.time()
-            keys_to_del = [k for k, v in LAST_ALERT_IDS.items() if current_time - v.get("ts", 0) > 86400]
+            keys_to_del = [k for k, v in LAST_ALERT_IDS.items() if current_time - v.get("ts", 0) > 259200]
             for k in keys_to_del:
                 LAST_ALERT_IDS.pop(k, None)
                 
@@ -306,6 +324,8 @@ async def save_alerts_state_async():
 
 @app.on_message()
 async def radar_handler(client, message):
+    global stats_processed_count
+    
     if not message.chat:
         return
 
@@ -318,6 +338,8 @@ async def radar_handler(client, message):
     if source_msg_key in PROCESSED_MESSAGES:
         return
     PROCESSED_MESSAGES[source_msg_key] = time.time()
+    
+    stats_processed_count += 1
     
     if len(PROCESSED_MESSAGES) > 500:
         keys_to_del = list(PROCESSED_MESSAGES.keys())[:100]
@@ -378,12 +400,11 @@ async def radar_handler(client, message):
         
     log_msg("INFO", "AI", f"Чистый ответ от ИИ:\n{result}") 
 
-    # 🔴 ФИКС №2: Регистронезависимая очистка тегов из финального текста
     clean_result = re.sub(r'\[(?:SPB|MSK|BELGOROD|KURSK)\]\s*', '', result, flags=re.IGNORECASE).strip()
-    
     allowed_regions = SOURCE_ROUTING[username]
     sent_any = False
     state_changed_flag = False
+    foreign_blocked = False
 
     async def send_and_track(reg, txt, reason):
         nonlocal state_changed_flag
@@ -392,90 +413,173 @@ async def radar_handler(client, message):
         is_yellow = "🟡" in txt
         
         reply_to = None
+        claimed_key = None
+        
         async with state_lock:
             if is_green and reply_source_key and reply_source_key in LAST_ALERT_IDS:
-                reply_to = LAST_ALERT_IDS[reply_source_key].get("regions", {}).get(reg)
+                reply_to = LAST_ALERT_IDS[reply_source_key].get("regions", {}).pop(reg, None)
+                claimed_key = reply_source_key
                 
-        # 🔴 ФИКС №1: Если это отбой, но реплая в памяти нет — рубим отправку
         if is_green and reply_to is None:
             log_msg("WARN", "SEND", f"Не найдено сообщение для реплая в {reg}. Отбой не отправляем.")
             return False
         
+        msg_id = None
+        try:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.get_event_loop()
+                
+            msg_id = await loop.run_in_executor(None, sync_send_to_channel, reg, txt, reply_to, is_green)
+            
+        except asyncio.CancelledError:
+            log_msg("WARN", "SEND", f"Задача отправки в {reg} отменена.")
+            raise
+        except Exception as e:
+            log_msg("ERROR", "SEND", f"Ошибка executor/сети в {reg}: {e}")
+            
+        finally:
+            if msg_id:
+                log_msg("INFO", "SEND", f"Успешно отправлено в {reg} {reason} (MSG_ID: {msg_id})")
+                async with state_lock:
+                    if is_green:
+                        if claimed_key and claimed_key in LAST_ALERT_IDS:
+                            if not LAST_ALERT_IDS[claimed_key].get("regions"):
+                                LAST_ALERT_IDS.pop(claimed_key, None)
+                            state_changed_flag = True
+                    elif is_red or is_yellow:
+                        if source_msg_key not in LAST_ALERT_IDS:
+                            LAST_ALERT_IDS[source_msg_key] = {"ts": time.time(), "regions": {}}
+                        LAST_ALERT_IDS[source_msg_key]["ts"] = time.time()
+                        LAST_ALERT_IDS[source_msg_key]["regions"][reg] = msg_id
+                        state_changed_flag = True
+            else:
+                if is_green and claimed_key and reply_to:
+                    async with state_lock:
+                        entry = LAST_ALERT_IDS.setdefault(claimed_key, {"ts": time.time(), "regions": {}})
+                        entry.setdefault("regions", {})[reg] = reply_to
+                    state_changed_flag = True
+                            
+        return bool(msg_id)
+
+    try:
+        if "🟢" in clean_result and reply_source_key:
+            async with state_lock:
+                saved_regions_dict = LAST_ALERT_IDS.get(reply_source_key, {}).get("regions", {})
+                saved_regions = list(saved_regions_dict.keys())
+                
+            ai_tags = [r for r in ["SPB", "MSK", "BELGOROD", "KURSK"] if re.search(rf"\[{r}\]", result, re.IGNORECASE)]
+            
+            regions_to_clear = []
+            if ai_tags:
+                regions_to_clear = [r for r in ai_tags if r in saved_regions]
+            else:
+                update_text = (message.text or message.caption or "").lower()
+                if any(alien in update_text for alien in FOREIGN_REGIONS):
+                    log_msg("WARN", "SYSTEM", "Отбой направлен на чужой регион. Скип очистки нашей тревоги.")
+                    foreign_blocked = True
+                else:
+                    regions_to_clear = saved_regions
+
+            for reg in regions_to_clear:
+                if await send_and_track(reg, clean_result, "(умный отбой по памяти)"):
+                    sent_any = True
+                    
+            if sent_any:
+                return 
+
+        for region in allowed_regions:
+            region_text = extract_region_text(result, region)
+            if region_text:
+                if await send_and_track(region, region_text, "(по тегу ИИ)!"):
+                    sent_any = True
+
+        if not sent_any and not foreign_blocked:
+            ai_tagged_any_known = any(re.search(rf"\[{r}\]", result, re.IGNORECASE) for r in ["SPB", "MSK", "BELGOROD", "KURSK"])
+            
+            if ai_tagged_any_known:
+                log_msg("WARN", "SYSTEM", "ИИ указал регион, которого нет в разрешенных для этого источника. Скип Fallback.")
+            else:
+                if username == "vrv_radar":
+                    log_msg("WARN", "SYSTEM", "VRV не получил тега от ИИ. Скип Fallback для безопасности (МСК/СПБ).")
+                else:
+                    await send_and_track(allowed_regions[0], clean_result, "(принудительно, ИИ забыл тег)")
+
+    finally:
+        if state_changed_flag:
+            await save_alerts_state_async()
+
+
+# === ФОНОВЫЕ ВОРКЕРЫ НАБЛЮДАЕМОСТИ ===
+async def admin_notifier_worker():
+    bot_token = BOTS_CONFIG["SPB"]["token"]
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    
+    while True:
+        try:
+            msg = await log_queue.get()
+            batch = [msg]
+            
+            # Окно батчинга 5 секунд (максимум 20 сообщений), чтобы не улететь в 429
+            try:
+                while len(batch) < 20:
+                    next_msg = await asyncio.wait_for(log_queue.get(), timeout=5.0)
+                    batch.append(next_msg)
+            except asyncio.TimeoutError:
+                pass
+                
+            text = "🚨 <b>АЛЕРТ СИСТЕМЫ</b> 🚨\n\n<pre>" + escape("\n\n".join(batch))[:3900] + "</pre>"
+            payload = {"chat_id": ADMIN_CHAT_ID, "text": text, "parse_mode": "HTML"}
+            
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, requests.post, url, payload)
+            
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            # Защита от рекурсии: ошибки воркера пишем только в консоль
+            print(f"Ошибка воркера уведомлений: {e}")
+
+async def heartbeat_worker():
+    global stats_processed_count
+    bot_token = BOTS_CONFIG["SPB"]["token"]
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    
+    while True:
+        await asyncio.sleep(14400) # Раз в 4 часа
+        
+        text = f"💚 <b>Радар жив</b>\nОбработано новых сообщений за 4 часа: {stats_processed_count}"
+        payload = {"chat_id": ADMIN_CHAT_ID, "text": text, "parse_mode": "HTML"}
+        
         try:
             loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, requests.post, url, payload)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"Ошибка heartbeat: {e}")
             
-        msg_id = await loop.run_in_executor(None, sync_send_to_channel, reg, txt, reply_to, is_green)
-        
-        if msg_id:
-            log_msg("INFO", "SEND", f"Успешно отправлено в {reg} {reason} (MSG_ID: {msg_id})")
-            async with state_lock:
-                if is_green:
-                    if reply_source_key and reply_source_key in LAST_ALERT_IDS:
-                        LAST_ALERT_IDS[reply_source_key]["regions"].pop(reg, None)
-                        if not LAST_ALERT_IDS[reply_source_key]["regions"]:
-                            LAST_ALERT_IDS.pop(reply_source_key, None)
-                        state_changed_flag = True
-                elif is_red or is_yellow:
-                    if source_msg_key not in LAST_ALERT_IDS:
-                        LAST_ALERT_IDS[source_msg_key] = {"ts": time.time(), "regions": {}}
-                    LAST_ALERT_IDS[source_msg_key]["regions"][reg] = msg_id
-                    state_changed_flag = True
-            return True
-        return False
+        stats_processed_count = 0
 
-    if "🟢" in clean_result and reply_source_key:
-        async with state_lock:
-            saved_regions_dict = LAST_ALERT_IDS.get(reply_source_key, {}).get("regions", {})
-            saved_regions = list(saved_regions_dict.keys())
-            
-        ai_tags = [r for r in ["SPB", "MSK", "BELGOROD", "KURSK"] if re.search(rf"\[{r}\]", result, re.IGNORECASE)]
-        
-        regions_to_clear = []
-        if ai_tags:
-            regions_to_clear = [r for r in ai_tags if r in saved_regions]
-        else:
-            update_text = (message.text or message.caption or "").lower()
-            if any(alien in update_text for alien in FOREIGN_REGIONS):
-                log_msg("WARN", "SYSTEM", "Отбой направлен на чужой регион. Скип очистки нашей тревоги.")
-            else:
-                regions_to_clear = saved_regions
 
-        for reg in regions_to_clear:
-            if await send_and_track(reg, clean_result, "(умный отбой по памяти)"):
-                sent_any = True
-                
-        if sent_any:
-            if state_changed_flag:
-                await save_alerts_state_async()
-            return 
-
-    for region in allowed_regions:
-        region_text = extract_region_text(result, region)
-        if region_text:
-            if await send_and_track(region, region_text, "(по тегу ИИ)!"):
-                sent_any = True
-
-    if not sent_any:
-        ai_tagged_any_known = any(re.search(rf"\[{r}\]", result, re.IGNORECASE) for r in ["SPB", "MSK", "BELGOROD", "KURSK"])
-        
-        if ai_tagged_any_known:
-            log_msg("WARN", "SYSTEM", "ИИ указал регион, которого нет в разрешенных для этого источника. Скип Fallback.")
-        else:
-            if username == "vrv_radar":
-                log_msg("WARN", "SYSTEM", "VRV не получил тега от ИИ. Скип Fallback для безопасности (МСК/СПБ).")
-            else:
-                await send_and_track(allowed_regions[0], clean_result, "(принудительно, ИИ забыл тег)")
-
-    if state_changed_flag:
-        await save_alerts_state_async()
-            
+# === ТОЧКА ВХОДА ===
 async def main():
-    log_msg("INFO", "SYSTEM", "=======================================")
-    log_msg("INFO", "SYSTEM", "Диспетчер ИИ-Радара УСПЕШНО ЗАПУЩЕН")
-    log_msg("INFO", "SYSTEM", "=======================================")
+    global log_queue, main_loop
     
+    log_msg("INFO", "SYSTEM", "=======================================")
+    log_msg("INFO", "SYSTEM", "Диспетчер ИИ-Радара ЗАПУСКАЕТСЯ...")
+    
+    main_loop = asyncio.get_running_loop()
+    log_queue = asyncio.Queue()
+    
+    if ADMIN_CHAT_ID:
+        asyncio.create_task(admin_notifier_worker())
+        asyncio.create_task(heartbeat_worker())
+        log_msg("INFO", "SYSTEM", "Система наблюдаемости активирована.")
+    else:
+        log_msg("WARN", "SYSTEM", "ADMIN_CHAT_ID не задан. Уведомления отключены.")
+        
     await app.start()
     try:
         try:
@@ -485,6 +589,7 @@ async def main():
         except Exception as e:
             log_msg("ERROR", "SYSTEM", f"Ошибка синхронизации диалогов: {e}")
 
+        log_msg("INFO", "SYSTEM", "=======================================")
         await idle()
     finally:
         await app.stop()
