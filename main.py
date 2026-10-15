@@ -109,6 +109,19 @@ SOURCE_ROUTING = {
     "radar_ru_belgorod": ["BELGOROD"]
 }
 
+# Каналы, посвященные строго одному региону (где допустимы короткие посты "Опасность по БПЛА" без названия области).
+# Общероссийский "locatorru" сюда КАТЕГОРИЧЕСКИ НЕ входит!
+MONO_REGION_SOURCES = {
+    "radar_ru_belgorod": "BELGOROD"
+}
+
+OWN_REGION_PREFIX_MAP = {
+    "KURSK": "курск",
+    "BELGOROD": "белгород",
+    "MSK": "москов",
+    "SPB": "ленинград"
+}
+
 ADMIN_CHAT_ID = get_env("ADMIN_CHAT_ID")
 ADMIN_BOT_TOKEN = get_env("ADMIN_BOT_TOKEN") or next((v["token"] for v in BOTS_CONFIG.values() if v["token"]), None)
 
@@ -207,7 +220,7 @@ async def heartbeat_worker():
                     _pending_snapshot = copy.deepcopy(ACTIVE_ALERTS)
                     _state_dirty.set()
             text = (
-                f"✅ <b>Радар жив (V18.6).</b>\n"
+                f"✅ <b>Радар жив (V18.7).</b>\n"
                 f"Обработано: {proc}\nОтправлено: {sent}\n"
                 f"Ошибок: {errs}\nАктивных тревог: {active_count}"
             )
@@ -370,14 +383,17 @@ FOREIGN_REGION_KEYWORDS = [
     "лиски", "острогожск", "россош", "брянск", "клинц", "унеч", "карачев", "стародуб",
     "орловск", "орел", "орёл", "мценск", "ливн", "липецк", "елец", "тамбов", "мичуринск",
     "саратов", "энгельс", "волгоград", "астрахан", "самар", "сызран", "тольятт",
-    "нижегород", "дзержинск", "казан", "татарстан", "елабуг", "нижнекамск", "башкортостан",
-    "уфа", "уфе", "уфу", "салават", "оренбург", "орск", "тульск", "тула", "туле", "тулу", "алексин", "узлов",
-    "калуж", "калуг", "людинов", "шайковк", "рязан", "смоленск", "тверск", "тверь", "твери",
-    "торопец", "ярослав", "ивановск", "владимирск", "костромск", "псков", "новгородск",
-    "мурманск", "архангельск", "карели", "ставропол", "дагестан", "каспийск", "чечн", "грозн",
-    "осети", "моздок", "ингушет", "кабардин", "лнр", "луганск", "белокуракин", "алчевск",
-    "днр", "донецк", "макеевк", "горловк", "мариупол", "запорож", "мелитопол",
-    "бердянск", "энергодар", "херсон", "геническ", "скадовск"
+    "пенз", "ульянов", "барышск", "перм", "удмурт", "ижевск", "воткинск", "чуваш",
+    "чебоксар", "мордов", "саранск", "марий", "йошкар", "киров", "екатеринбург", "свердловск",
+    "челябинск", "тюмен", "курган", "нижегород", "дзержинск", "казан", "татарстан", "елабуг",
+    "нижнекамск", "башкортостан", "уфа", "уфе", "уфу", "салават", "оренбург", "орск",
+    "тульск", "тула", "туле", "тулу", "алексин", "узлов", "калуж", "калуг", "людинов",
+    "шайковк", "рязан", "смоленск", "тверск", "тверь", "твери", "торопец", "ярослав",
+    "ивановск", "владимирск", "костромск", "псков", "новгородск", "мурманск", "архангельск",
+    "карели", "ставропол", "дагестан", "каспийск", "чечн", "грозн", "осети", "моздок",
+    "ингушет", "кабардин", "лнр", "луганск", "белокуракин", "алчевск", "днр", "донецк",
+    "макеевк", "горловк", "мариупол", "запорож", "мелитопол", "бердянск", "энергодар",
+    "херсон", "геническ", "скадовск"
 ]
 
 TAG_ALIASES_LIST = {
@@ -414,9 +430,16 @@ INLINE_SIGNATURES_RE = re.compile(
 
 TRANSIT_PHRASE_RE = re.compile(
     r"(?:в\s+сторону|со\s+стороны|в\s+направлении|курсом\s+на|курс\s+на)\s+"
-    r"(?:(?:г\.|города|город|пос[её]лка|села|пгт|деревни)\s+)?"
-    r"[а-яёa-z\-]+(?:\s+(?:област\w+|обл\.?|кра\w+|район\w+|р-н\w*|округ\w*))?",
+    r"(?:(?:г\.|города|город|пос[её]лка|села|пгт|деревни|республики|респ\.)\s+)?"
+    r"[а-яёa-z\-]+(?:\s+(?:област\w+|обл\.?|кра\w+|республик\w+|респ\.?|район\w+|р-н\w*|округ\w*|ао))?",
     re.IGNORECASE
+)
+
+# Универсальный шаблон любого региона РФ со словом область/обл./край/республика/АО
+ANY_REGION_UNIT_PAT = (
+    r"(?:[А-ЯЁа-яё\-]+(?:\s+[А-ЯЁа-яё\-]+)?\s+(?:област\w+|\bобл\.|\bобл\b|кра\w+|республик\w+|\bресп\.|\bресп\b|автономн\w+\s+округ\w*|\bао\b)|"
+    r"(?:республик\w+|\bресп\.|\bресп\b)\s+[А-ЯЁа-яё\-]+(?:\s+[А-ЯЁа-яё\-]+)?|"
+    r"\bЛНР\b|\bДНР\b)"
 )
 
 IS_IGNORE_RESPONSE_RE = re.compile(
@@ -486,9 +509,17 @@ def has_region_keywords(text: str, reg: str) -> bool:
 def has_foreign_keywords(text: str, target_reg: str) -> bool:
     """
     Проверяет, упоминаются ли в тексте чужие регионы как основное место события
-    (игнорируя транзитные направления вроде 'летел в сторону Курска').
+    (автоматически ловит любые '<X> область/край/республика/АО' + список городов, игнорируя транзитные направления).
     """
     text_low = strip_transit_phrases(strip_moscow_time(text.lower()))
+    own_prefix = OWN_REGION_PREFIX_MAP[target_reg]
+
+    # 1. Любая область, край, республика или АО РФ, не совпадающая с целевым регионом — сразу чужой регион!
+    for m in re.finditer(ANY_REGION_UNIT_PAT, text_low, re.IGNORECASE):
+        if own_prefix not in m.group(0).lower():
+            return True
+
+    # 2. Проверка по словарю чужих городов и регионов
     for kw in FOREIGN_REGION_KEYWORDS:
         if len(kw) <= 4:
             if re.search(rf"\b{re.escape(kw)}\b", text_low, re.IGNORECASE):
@@ -548,7 +579,6 @@ RED_COMBAT_RE = re.compile(
     re.IGNORECASE
 )
 
-# Признаки живой оперативной угрозы ПРЯМО СЕЙЧАС (не включает простое слово "обломки", чтобы ночные сводки о падении обломков оставались ⚪)
 LIVE_URGENT_RE = re.compile(
     r"работает\s+пво|работа\s+пво|тревога\s+по\s+бпла|опасность\s+атаки\s+бпла|"
     r"фиксация\s+бпла|прол[её]т[ы]?\s+бпла|движение\s+бпла|групп[аы]\s+бпла|волна\s+бпла|"
@@ -631,16 +661,10 @@ EVENT_WORD_RE = re.compile(
     re.IGNORECASE
 )
 
-ANY_REGION_UNIT_PAT = (
-    r"(?:[А-ЯЁа-яё\-]+(?:\s+[А-ЯЁа-яё\-]+)?\s+(?:област\w+|\bобл\.|\bобл\b|кра\w+|республик\w+|\bресп\.|\bресп\b|автономн\w+\s+округ\w*|\bао\b)|"
-    r"(?:республик\w+|\bресп\.|\bресп\b)\s+[А-ЯЁа-яё\-]+(?:\s+[А-ЯЁа-яё\-]+)?|"
-    r"\bЛНР\b|\bДНР\b)"
-)
-
 FOREIGN_CAPITALS_MAP = {
-    "KURSK": r"Ор[её]л|Брянск|Воронеж|Белгород|Липецк|Тул[аеу]|Калуг[аеу]|Рязан[ьи]|Смоленск|Твер[ьи]|Краснодар|Ростов|Саратов",
-    "BELGOROD": r"Ор[её]л|Брянск|Воронеж|Курск|Липецк|Тул[аеу]|Калуг[аеу]|Рязан[ьи]|Смоленск|Твер[ьи]|Краснодар|Ростов|Саратов",
-    "MSK": r"Ор[её]л|Брянск|Воронеж|Курск|Белгород|Липецк|Тул[аеу]|Калуг[аеу]|Рязан[ьи]|Смоленск|Твер[ьи]|Ярославл[ьи]|Владимир",
+    "KURSK": r"Ор[её]л|Брянск|Воронеж|Белгород|Липецк|Тул[аеу]|Калуг[аеу]|Рязан[ьи]|Смоленск|Твер[ьи]|Краснодар|Ростов|Саратов|Самар[аеу]|Ульяновск|Пенз[аеу]|Перм[ьи]|Ижевск|Воткинск|Тольятти",
+    "BELGOROD": r"Ор[её]л|Брянск|Воронеж|Курск|Липецк|Тул[аеу]|Калуг[аеу]|Рязан[ьи]|Смоленск|Твер[ьи]|Краснодар|Ростов|Саратов|Самар[аеу]|Ульяновск|Пенз[аеу]|Перм[ьи]|Ижевск|Воткинск|Тольятти",
+    "MSK": r"Ор[её]л|Брянск|Воронеж|Курск|Белгород|Липецк|Тул[аеу]|Калуг[аеу]|Рязан[ьи]|Смоленск|Твер[ьи]|Ярославл[ьи]|Владимир|Самар[аеу]|Ульяновск|Пенз[аеу]|Перм[ьи]|Ижевск",
     "SPB": r"Псков|Новгород|Петрозаводск|Мурманск|Твер[ьи]|Смоленск|Москва"
 }
 
@@ -662,12 +686,7 @@ def strip_foreign_from_comma_lists(body: str, reg: str) -> str:
     Вырезает чужие области/края/республики/обл. и чужие областные центры
     из перечислений через запятую, 100% сохраняя любые сёла, деревни, посёлки, хутора и маршруты.
     """
-    own_region_prefix = {
-        "KURSK": "курск",
-        "BELGOROD": "белгород",
-        "MSK": "москов",
-        "SPB": "ленинград"
-    }[reg]
+    own_region_prefix = OWN_REGION_PREFIX_MAP[reg]
 
     def _replace_trailing_region(m):
         phrase = m.group(1)
@@ -727,7 +746,7 @@ def strip_foreign_from_comma_lists(body: str, reg: str) -> str:
     body = re.sub(r"\s{2,}", " ", body).strip(" ,")
     return body
 
-def post_process_region_text(reg: str, raw_region_text: str) -> str:
+def post_process_region_text(reg: str, raw_region_text: str, allow_region_prepend: bool = False) -> str:
     """
     Убирает Markdown (**), мусорные префиксы (ПОСТФАКТУМ:), вычищает чужие области из списков,
     детерминированно корректирует светофор с учетом ретроспективы/отрицаний и защищает от пустых/ложных тревог.
@@ -774,7 +793,6 @@ def post_process_region_text(reg: str, raw_region_text: str) -> str:
     has_negated_threat = bool(NEGATED_THREAT_RE.search(body_low))
     is_active_regime = bool(ACTIVE_REGIME_RE.search(body_low)) and not has_negated_threat and not has_refutation
 
-    # Вырезаем клаузу отбоя перед проверкой остаточных боевых и желтых триггеров
     body_without_clear = STRIP_CLEAR_CLAUSE_RE.sub(" ", body_low) if has_positive_clear else body_low
     has_live_urgent = bool(LIVE_URGENT_RE.search(body_without_clear)) and not has_refutation
     has_red_combat = bool(RED_COMBAT_RE.search(body_without_clear)) and not has_refutation
@@ -791,7 +809,6 @@ def post_process_region_text(reg: str, raw_region_text: str) -> str:
         and not has_refutation
     )
 
-    # Ретроспективные сводки (за ночь / за сутки / 08:00-20:00 / сводка губернатора о пострадавших)
     is_retrospective = (
         (
             bool(RETROSPECTIVE_SUMMARY_RE.search(body_low))
@@ -805,7 +822,6 @@ def post_process_region_text(reg: str, raw_region_text: str) -> str:
     if has_negated_clear and original_light == "🟢":
         original_light = "🟡"
 
-    # Зеленый отбой разрешен только при отсутствии любых остаточных красных/желтых угроз и ретроспективы
     is_all_clear = (
         (
             has_positive_clear
@@ -859,7 +875,8 @@ def post_process_region_text(reg: str, raw_region_text: str) -> str:
         elif light == "🔴":
             body = f"{body} — тревога по БПЛА."
 
-    if not has_region_keywords(body, reg) and not has_foreign_keywords(body, reg):
+    # Подставляем название области ТОЛЬКО для разрешенных моно-каналов и при полном отсутствии чужих регионов
+    if allow_region_prepend and not has_region_keywords(body, reg) and not has_foreign_keywords(body, reg):
         body = f"{short_region_name} — {body}"
 
     return f"{light} {body}"
@@ -951,7 +968,7 @@ async def process_with_ai(text, source, allowed_regions):
 
 1. ЦЕЛЕВЫЕ РЕГИОНЫ ДАННОГО ИСТОЧНИКА:
    {regions_desc}
-   - Если в тексте НЕТ информации, относящейся к указанным выше целевым регионам (например, речь идет только про Краснодарский край, Анапу, Сочи, Крым, Воронеж, Ростов, Брянск, Орел или время "10:00 мск") — верни ТОЛЬКО одно слово: ИГНОР
+   - Если в тексте НЕТ информации, относящейся к указанным выше целевым регионам (например, речь идет только про Краснодарский край, Анапу, Сочи, Крым, Воронеж, Ростов, Брянск, Орел, Пермь, Ульяновск, Самару, Пензу, Удмуртию или время "10:00 мск") — верни ТОЛЬКО одно слово: ИГНОР
    - Если в посте перечислено несколько областей (например, "Курская область, Орловская область — отбой опасности по БПЛА"), УДАЛИ все чужие области и оставь ТОЛЬКО наш целевой регион!
    - Соседний регион разрешено оставить ТОЛЬКО если он указывает направление пролёта в наш регион или из него (например: "Курская область — пролёт БПЛА в сторону Орла").
    - Внутри нашего целевого региона сохраняй ВСЕ названия городов, районов, округов и сёл на 100%!
@@ -1057,10 +1074,12 @@ async def radar_handler(client, message):
 
     allowed_regions = SOURCE_ROUTING[username]
     matched_regions = [reg for reg in allowed_regions if has_region_keywords(text, reg)]
+    is_mono_source = (username in MONO_REGION_SOURCES)
 
-    # Если моно-канал (например, radar_ru_belgorod) дал короткое сообщение без области и без чужих регионов
-    if not matched_regions and len(allowed_regions) == 1:
-        single_reg = allowed_regions[0]
+    # ВАЖНО: Подстановка области разрешена ТОЛЬКО для чисто регионального канала (radar_ru_belgorod),
+    # и НИКОГДА для общероссийского locatorru!
+    if not matched_regions and is_mono_source:
+        single_reg = MONO_REGION_SOURCES[username]
         text_low = text.lower()
         has_alert_word = any(w in text_low for w in ["бпла", "опасност", "тревог", "отбой", "ракет", "пво", "сбит", "сбил", "обстрел"])
         if has_alert_word and not has_foreign_keywords(text, single_reg):
@@ -1128,7 +1147,7 @@ async def radar_handler(client, message):
             if is_ignore_text(region_text):
                 continue
 
-            region_text = post_process_region_text(reg, region_text)
+            region_text = post_process_region_text(reg, region_text, allow_region_prepend=is_mono_source)
             if not region_text:
                 continue
 
@@ -1283,7 +1302,7 @@ async def main():
     async for _ in app.get_dialogs(limit=50):
         pass
     if ADMIN_CHAT_ID:
-        await MAIN_LOOP.run_in_executor(None, sync_send_admin_message, "✅ <b>Радар (V18.6 Argon Sovereign) запущен!</b>")
+        await MAIN_LOOP.run_in_executor(None, sync_send_admin_message, "✅ <b>Радар (V18.7 Argon Prod) запущен!</b>")
     try:
         await idle()
     finally:
