@@ -14,6 +14,14 @@ from google import genai
 from google.genai import types
 from google.genai.errors import APIError
 from dotenv import load_dotenv
+from radar_routing import (
+    has_foreign_keywords,
+    has_foreign_subject_geography,
+    has_region_keywords,
+    is_region_threat_target,
+    normalize_routing_text,
+    strip_foreign_from_comma_lists,
+)
 
 load_dotenv()
 
@@ -104,22 +112,12 @@ if missing_bot_tokens:
     raise RuntimeError(f"[-] ОШИБКА СТАРТА: Не заданы токены ботов для регионов: {', '.join(missing_bot_tokens)}!")
 
 SOURCE_ROUTING = {
-    "locatorru": ["KURSK"],
+    "locatorru": ["KURSK", "BELGOROD"],
     "vrv_radar": ["SPB", "MSK"],
-    "radar_ru_belgorod": ["BELGOROD"]
 }
 
-# Каналы, посвященные строго одному региону (где допустимы короткие посты "Опасность по БПЛА" без названия области).
-# Общероссийский "locatorru" сюда КАТЕГОРИЧЕСКИ НЕ входит!
+# locatorru публикует сводки по всей стране; для него нельзя подставлять регион вслепую.
 MONO_REGION_SOURCES = {
-    "radar_ru_belgorod": "BELGOROD"
-}
-
-OWN_REGION_PREFIX_MAP = {
-    "KURSK": "курск",
-    "BELGOROD": "белгород",
-    "MSK": "москов",
-    "SPB": "ленинград"
 }
 
 ADMIN_CHAT_ID = get_env("ADMIN_CHAT_ID")
@@ -324,78 +322,6 @@ async def state_saver_worker():
 PROCESSED_MESSAGES = {}
 SENT_REGIONS = {}  # Порегиональная защита от дублей при частичном сбое мульти-отправки
 
-# === 6. СЛОВАРИ ГЕОГРАФИИ И ФИЛЬТРАЦИИ ===
-REGION_KEYWORDS = {
-    "BELGOROD": [
-        "белгород", "белгородск", "шебекин", "валуй", "грайворон", "оскол", "губкин",
-        "волоконов", "борисов", "ивнянск", "ракитн", "ракитянск", "краснояруж",
-        "красненск", "алексеев", "короч", "вейделев", "ровен", "чернян", "прохоров",
-        "строител", "октябрьск", "томаров", "тавров", "дубов", "майск", "разумн",
-        "беломестн", "стрелецк", "головчин", "бессонов", "маслов", "уразов", "бирюч",
-        "вознесеновк", "таволжанк", "нежегол", "яковлевск"
-    ],
-    "KURSK": [
-        "курск", "курчат", "судж", "рыльск", "обоян", "льгов", "коренев", "глушков",
-        "беловск", "железногорск", "фатеж", "щигр", "дмитриев", "тимск",
-        "горшечн", "поныр", "медвен", "золотухин", "мантуров", "солнцев", "черемисин",
-        "касторн", "пристен", "прямицын", "теткин", "тёткин", "халино", "конышев",
-        "большесолдат", "хомутов", "крупец"
-    ],
-    "MSK": [
-        "москв", "московск", "moscow", "подмосков", "тинао", "зеленоград",
-        "подольск", "люберц", "королев", "химк", "балаших", "мытищ", "красногорск",
-        "одинцов", "домодедов", "раменск", "ступин", "кашир", "коломн", "чехов",
-        "серпухов", "истринск", "можайск", "наро-фоминск", "нарофоминск", "воскресенск",
-        "щелков", "щёлков", "пушкин", "сергиев", "дмитров", "клинск", "солнечногорск",
-        "ногинск", "электростал", "орехово-зуев", "павловский посад", "егорьевск",
-        "зарайск", "луховиц", "протвин", "пущин", "рузск", "шатур", "талдом", "дубненск",
-        "фрязин", "жуковск", "бронниц", "видное", "котельник", "реутов", "долгопрудн",
-        "лобненск", "кубинк", "алабин", "внуков", "шереметьев"
-    ],
-    "SPB": [
-        "петербург", "санкт", "питер", "ленинград", "ленинградск",
-        "ленобласт", "лен област", "лен. област", "выборг", "гатчин", "кронштадт",
-        "лужск", "кингисепп", "волхов", "тихвин", "всеволожск", "мурин",
-        "кудров", "тосн", "кириш", "сосновый бор", "приозерск", "подпорож", "лодейн",
-        "бокситогорск", "сланц", "волосов", "ломоносов", "колпин", "сестрорецк",
-        "петергоф", "усть-луг", "сертолов", "отрадн", "шлиссельбург"
-    ]
-}
-
-REGION_EXACT_WORDS = {
-    "SPB": ["спб", "с-пб", "луга", "луге", "лугу", "лугой"],
-    "MSK": [
-        "мск", "мкад", "истра", "истре", "истру", "истрой",
-        "клин", "клина", "клину", "клином", "клине",
-        "руза", "рузе", "рузу", "рузой",
-        "дубна", "дубне", "дубну", "дубной",
-        "лобня", "лобне", "лобню", "лобней"
-    ],
-    "BELGOROD": ["ивня", "ивне", "ивню", "ивней"],
-    "KURSK": ["тим", "тима", "тиме", "тимом", "тиму"]
-}
-
-FOREIGN_REGION_KEYWORDS = [
-    "краснодар", "анап", "темрюк", "таман", "новороссийск", "геленджик", "туапсе",
-    "сочи", "адлер", "ейск", "славянск-на-кубани", "черноморск", "крым", "севастопол",
-    "керч", "феодоси", "евпатори", "симферопол", "джанко", "саки", "ялт", "ростов",
-    "таганрог", "батайск", "миллеров", "морозовск", "каменск-шахтинск", "воронеж", "борисоглебск",
-    "лиски", "острогожск", "россош", "брянск", "клинц", "унеч", "карачев", "стародуб",
-    "орловск", "орел", "орёл", "мценск", "ливн", "липецк", "елец", "тамбов", "мичуринск",
-    "саратов", "энгельс", "волгоград", "астрахан", "самар", "сызран", "тольятт",
-    "пенз", "ульянов", "барышск", "перм", "удмурт", "ижевск", "воткинск", "чуваш",
-    "чебоксар", "мордов", "саранск", "марий", "йошкар", "киров", "екатеринбург", "свердловск",
-    "челябинск", "тюмен", "курган", "нижегород", "дзержинск", "казан", "татарстан", "елабуг",
-    "нижнекамск", "башкортостан", "уфа", "уфе", "уфу", "салават", "оренбург", "орск",
-    "тульск", "тула", "туле", "тулу", "алексин", "узлов", "калуж", "калуг", "людинов",
-    "шайковк", "рязан", "смоленск", "тверск", "тверь", "твери", "торопец", "ярослав",
-    "ивановск", "владимирск", "костромск", "псков", "новгородск", "мурманск", "архангельск",
-    "карели", "ставропол", "дагестан", "каспийск", "чечн", "грозн", "осети", "моздок",
-    "ингушет", "кабардин", "лнр", "луганск", "белокуракин", "алчевск", "днр", "донецк",
-    "макеевк", "горловк", "мариупол", "запорож", "мелитопол", "бердянск", "энергодар",
-    "херсон", "геническ", "скадовск"
-]
-
 TAG_ALIASES_LIST = {
     "SPB": ["SPB", "СПБ", "PITER", "ПИТЕР", "ПЕТЕРБУРГ", "ЛЕНИНГРАДСК"],
     "MSK": ["MSK", "МСК", "MOSCOW", "МОСКВА", "МОСКОВСК", "ПОДМОСКОВ"],
@@ -422,24 +348,10 @@ SIGNATURE_LINE_PATTERNS = [
 ]
 
 INLINE_SIGNATURES_RE = re.compile(
-    r"(?:🎯|📡|📢)?\s*(?:радар\.ру\s*\|\s*белгород|локатор\s+россии)\s*(?:[-—|]\s*)?(?:@\w+)?|"
+    r"(?:🎯|📡|📢)?\s*(?:радар\.ру\s*\|\s*белгород|локатор\s+россии)\s*(?:[\-–—―|]\s*)?(?:@\w+)?|"
     r"@radar_ru_belgorod|@locatorru|@vrv_radar|@vrv_support|"
     r"https?://\S+|t\.me/\S+",
     re.IGNORECASE
-)
-
-TRANSIT_PHRASE_RE = re.compile(
-    r"(?:в\s+сторону|со\s+стороны|в\s+направлении|курсом\s+на|курс\s+на)\s+"
-    r"(?:(?:г\.|города|город|пос[её]лка|села|пгт|деревни|республики|респ\.)\s+)?"
-    r"[а-яёa-z\-]+(?:\s+(?:област\w+|обл\.?|кра\w+|республик\w+|респ\.?|район\w+|р-н\w*|округ\w*|ао))?",
-    re.IGNORECASE
-)
-
-# Универсальный шаблон любого региона РФ со словом область/обл./край/республика/АО
-ANY_REGION_UNIT_PAT = (
-    r"(?:[А-ЯЁа-яё\-]+(?:\s+[А-ЯЁа-яё\-]+)?\s+(?:област\w+|\bобл\.|\bобл\b|кра\w+|республик\w+|\bресп\.|\bресп\b|автономн\w+\s+округ\w*|\bао\b)|"
-    r"(?:республик\w+|\bресп\.|\bресп\b)\s+[А-ЯЁа-яё\-]+(?:\s+[А-ЯЁа-яё\-]+)?|"
-    r"\bЛНР\b|\bДНР\b)"
 )
 
 IS_IGNORE_RESPONSE_RE = re.compile(
@@ -466,6 +378,7 @@ def clean_source_text(text: str) -> str:
     """
     if not text:
         return ""
+    text = normalize_routing_text(text)
     cleaned_lines = []
     for line in text.splitlines():
         stripped = line.strip()
@@ -479,67 +392,6 @@ def clean_source_text(text: str) -> str:
         if line_clean:
             cleaned_lines.append(line_clean)
     return "\n".join(cleaned_lines).strip()
-
-def strip_moscow_time(text_low: str) -> str:
-    """Убирает любые обозначения московского часового пояса ('10:00 мск', '10:00 (мск)', 'по мск')."""
-    text_low = re.sub(
-        r"\b\d{1,2}(?:[:.]\d{2})?\s*(?:ч(?:ас(?:а|ов)?)?\.?\s*)?\(?\s*мск\s*\)?(?=\b|[^а-яёa-z0-9])",
-        "",
-        text_low
-    )
-    text_low = re.sub(r"\b(?:по|время)\s+\(?\s*мск\s*\)?(?=\b|[^а-яёa-z0-9])", "", text_low)
-    text_low = re.sub(r"\(\s*мск\s*\)", "", text_low)
-    return text_low
-
-def strip_transit_phrases(text_low: str) -> str:
-    """Убирает транзитные направления ('в сторону города Курска'), чтобы они не считались чужим регионом."""
-    return TRANSIT_PHRASE_RE.sub("", text_low)
-
-def has_region_keywords(text: str, reg: str) -> bool:
-    """Проверяет наличие географии целевого региона в тексте."""
-    text_low = strip_moscow_time(text.lower())
-    for exact_kw in REGION_EXACT_WORDS.get(reg, []):
-        if re.search(rf"\b{re.escape(exact_kw)}\b", text_low, re.IGNORECASE):
-            return True
-    for kw in REGION_KEYWORDS.get(reg, []):
-        if re.search(rf"\b{re.escape(kw)}", text_low, re.IGNORECASE):
-            return True
-    return False
-
-def has_foreign_keywords(text: str, target_reg: str) -> bool:
-    """
-    Проверяет, упоминаются ли в тексте чужие регионы как основное место события
-    (автоматически ловит любые '<X> область/край/республика/АО' + список городов, игнорируя транзитные направления).
-    """
-    text_low = strip_transit_phrases(strip_moscow_time(text.lower()))
-    own_prefix = OWN_REGION_PREFIX_MAP[target_reg]
-
-    # 1. Любая область, край, республика или АО РФ, не совпадающая с целевым регионом — сразу чужой регион!
-    for m in re.finditer(ANY_REGION_UNIT_PAT, text_low, re.IGNORECASE):
-        if own_prefix not in m.group(0).lower():
-            return True
-
-    # 2. Проверка по словарю чужих городов и регионов
-    for kw in FOREIGN_REGION_KEYWORDS:
-        if len(kw) <= 4:
-            if re.search(rf"\b{re.escape(kw)}\b", text_low, re.IGNORECASE):
-                return True
-        else:
-            if re.search(rf"\b{re.escape(kw)}", text_low, re.IGNORECASE):
-                return True
-    for other_reg, exact_kws in REGION_EXACT_WORDS.items():
-        if other_reg == target_reg:
-            continue
-        for exact_kw in exact_kws:
-            if re.search(rf"\b{re.escape(exact_kw)}\b", text_low, re.IGNORECASE):
-                return True
-    for other_reg, kws in REGION_KEYWORDS.items():
-        if other_reg == target_reg:
-            continue
-        for kw in kws:
-            if re.search(rf"\b{re.escape(kw)}", text_low, re.IGNORECASE):
-                return True
-    return False
 
 def escape_and_truncate(text: str, max_escaped_len: int = 3800) -> str:
     """
@@ -661,97 +513,12 @@ EVENT_WORD_RE = re.compile(
     re.IGNORECASE
 )
 
-FOREIGN_CAPITALS_MAP = {
-    "KURSK": r"Ор[её]л|Брянск|Воронеж|Белгород|Липецк|Тул[аеу]|Калуг[аеу]|Рязан[ьи]|Смоленск|Твер[ьи]|Краснодар|Ростов|Саратов|Самар[аеу]|Ульяновск|Пенз[аеу]|Перм[ьи]|Ижевск|Воткинск|Тольятти",
-    "BELGOROD": r"Ор[её]л|Брянск|Воронеж|Курск|Липецк|Тул[аеу]|Калуг[аеу]|Рязан[ьи]|Смоленск|Твер[ьи]|Краснодар|Ростов|Саратов|Самар[аеу]|Ульяновск|Пенз[аеу]|Перм[ьи]|Ижевск|Воткинск|Тольятти",
-    "MSK": r"Ор[её]л|Брянск|Воронеж|Курск|Белгород|Липецк|Тул[аеу]|Калуг[аеу]|Рязан[ьи]|Смоленск|Твер[ьи]|Ярославл[ьи]|Владимир|Самар[аеу]|Ульяновск|Пенз[аеу]|Перм[ьи]|Ижевск",
-    "SPB": r"Псков|Новгород|Петрозаводск|Мурманск|Твер[ьи]|Смоленск|Москва"
-}
-
-PROTECTED_GEO_PREFIX_RE = re.compile(
-    r"(?:в\s+сторону|со\s+стороны|в\s+направлении|курсом\s+на|курс\s+на|от|из|над|около|вблизи|"
-    r"\bс\.|\bсело|\bсела|\bселе|\bп\.|\bпос\.|\bпос[её]лок|\bпос[её]лка|\bпгт\.?|"
-    r"\bд\.|\bдер\.|\bдеревн[яие]|\bх\.|\bхут\.|\bхутор[ае]?|\bст\.|\bстаниц[аые]|\bаул[ае]?|"
-    r"\bг\.о\.|\bокруг\w*|\bрайон\w*|\bр-н\w*)\s*$",
-    re.IGNORECASE
-)
-
-def _has_protected_prefix(full_text: str, match_start: int) -> bool:
-    """Проверяет текст перед найденным топонимом на наличие маркеров села/деревни/посёлка или маршрута."""
-    preceding = full_text[max(0, match_start - 35):match_start]
-    return bool(PROTECTED_GEO_PREFIX_RE.search(preceding))
-
-def strip_foreign_from_comma_lists(body: str, reg: str) -> str:
-    """
-    Вырезает чужие области/края/республики/обл. и чужие областные центры
-    из перечислений через запятую, 100% сохраняя любые сёла, деревни, посёлки, хутора и маршруты.
-    """
-    own_region_prefix = OWN_REGION_PREFIX_MAP[reg]
-
-    def _replace_trailing_region(m):
-        phrase = m.group(1)
-        if own_region_prefix in phrase.lower():
-            return m.group(0)
-        if _has_protected_prefix(m.string, m.start(1)):
-            return m.group(0)
-        return ""
-
-    def _replace_leading_region(m):
-        phrase = m.group(1)
-        if own_region_prefix in phrase.lower():
-            return m.group(0)
-        if _has_protected_prefix(m.string, m.start(1)):
-            return m.group(0)
-        return ""
-
-    for _ in range(2):
-        body = re.sub(
-            rf",\s*({ANY_REGION_UNIT_PAT})(?=\s*(?:[,—\-:.]|отбой|опасност|тревог|внимани|$))",
-            _replace_trailing_region,
-            body,
-            flags=re.IGNORECASE
-        )
-        body = re.sub(
-            rf"({ANY_REGION_UNIT_PAT})\s*,\s*",
-            _replace_leading_region,
-            body,
-            flags=re.IGNORECASE
-        )
-
-    capitals_pat = FOREIGN_CAPITALS_MAP.get(reg, "")
-    if capitals_pat:
-        def _replace_trailing_capital(m):
-            if _has_protected_prefix(m.string, m.start(1)):
-                return m.group(0)
-            return ""
-
-        def _replace_leading_capital(m):
-            if _has_protected_prefix(m.string, m.start(1)):
-                return m.group(0)
-            return ""
-
-        body = re.sub(
-            rf",\s*(\b(?:{capitals_pat})\b)(?=\s*(?:[,—\-:.]|и\s+|отбой|опасност|тревог|$))",
-            _replace_trailing_capital,
-            body,
-            flags=re.IGNORECASE
-        )
-        body = re.sub(
-            rf"(\b(?:{capitals_pat})\b)\s*,\s*(?=[А-ЯЁа-яё])",
-            _replace_leading_capital,
-            body,
-            flags=re.IGNORECASE
-        )
-
-    body = re.sub(r"\s{2,}", " ", body).strip(" ,")
-    return body
-
 def post_process_region_text(reg: str, raw_region_text: str, allow_region_prepend: bool = False) -> str:
     """
     Убирает Markdown (**), мусорные префиксы (ПОСТФАКТУМ:), вычищает чужие области из списков,
     детерминированно корректирует светофор с учетом ретроспективы/отрицаний и защищает от пустых/ложных тревог.
     """
-    text = re.sub(r"(\*\*|__|~~|`)", "", raw_region_text)
+    text = normalize_routing_text(re.sub(r"(\*\*|__|~~|`)", "", raw_region_text))
     text = re.sub(r"(?m)^\s*#+\s*", "", text).strip()
 
     m = re.search(r"(🟢|🔴|🟡|⚪️|⚪)", text[:100])
@@ -969,7 +736,12 @@ async def process_with_ai(text, source, allowed_regions):
 1. ЦЕЛЕВЫЕ РЕГИОНЫ ДАННОГО ИСТОЧНИКА:
    {regions_desc}
    - Если в тексте НЕТ информации, относящейся к указанным выше целевым регионам (например, речь идет только про Краснодарский край, Анапу, Сочи, Крым, Воронеж, Ростов, Брянск, Орел, Пермь, Ульяновск, Самару, Пензу, Удмуртию или время "10:00 мск") — верни ТОЛЬКО одно слово: ИГНОР
+   - Строго различай ЦЕЛЬ опасности и точку вылета: регион перед тире (или в списке, где объявлены опасность/отбой/работа ПВО) — целевой; упоминания после «от», «из», «со стороны», «покинул», «ушёл из», «вылетел из» — точка вылета, а НЕ цель.
+   - Топоним целевого региона только в конструкции «от <района/области>» или «из <района/области>» не даёт права отправлять пост этому региону. Например, «Орловская область — опасность по БПЛА от Поныри, Курская область» для KURSK и BELGOROD означает ИГНОР.
+   - Направление на целевой регион считается угрозой только при явном векторе («в сторону», «в направлении», «курс/курсом на», «далее на», «прошёл БПЛА на», «подлёт к»). Сохраняй исходный регион в тексте направления, если он нужен для смысла.
+   - Никогда не подменяй чужую область в начале сообщения названием целевого региона. Не добавляй [KURSK] или [BELGOROD], если соответствующая область/город не является целью или явным адресатом вектора движения.
    - Если в посте перечислено несколько областей (например, "Курская область, Орловская область — отбой опасности по БПЛА"), УДАЛИ все чужие области и оставь ТОЛЬКО наш целевой регион!
+   - Если список населённых пунктов перед чужой областью относится к этой чужой области, удали весь сегмент целиком; не оставляй эти населённые пункты без их области.
    - Соседний регион разрешено оставить ТОЛЬКО если он указывает направление пролёта в наш регион или из него (например: "Курская область — пролёт БПЛА в сторону Орла").
    - Внутри нашего целевого региона сохраняй ВСЕ названия городов, районов, округов и сёл на 100%!
 
@@ -1073,11 +845,10 @@ async def radar_handler(client, message):
             return
 
     allowed_regions = SOURCE_ROUTING[username]
-    matched_regions = [reg for reg in allowed_regions if has_region_keywords(text, reg)]
+    matched_regions = [reg for reg in allowed_regions if is_region_threat_target(text, reg)]
     is_mono_source = (username in MONO_REGION_SOURCES)
 
-    # ВАЖНО: Подстановка области разрешена ТОЛЬКО для чисто регионального канала (radar_ru_belgorod),
-    # и НИКОГДА для общероссийского locatorru!
+    # Подстановка допустима только для явно настроенного моно-регионального источника.
     if not matched_regions and is_mono_source:
         single_reg = MONO_REGION_SOURCES[username]
         text_low = text.lower()
@@ -1151,8 +922,15 @@ async def radar_handler(client, message):
             if not region_text:
                 continue
 
-            if not has_region_keywords(region_text, reg):
-                log_msg("WARN", "FILTER", f"[{reg}] Отклонен чужой пост: {region_text[:100]}")
+            if not is_region_threat_target(text, reg):
+                log_msg("WARN", "FILTER", f"[{reg}] Отклонен: в исходном сообщении нет подтвержденной цели: {region_text[:100]}")
+                continue
+
+            if (
+                not is_region_threat_target(region_text, reg)
+                or has_foreign_subject_geography(region_text, reg)
+            ):
+                log_msg("WARN", "FILTER", f"[{reg}] Отклонен финальным валидатором географии: {region_text[:100]}")
                 continue
 
             found_any_tags = True
