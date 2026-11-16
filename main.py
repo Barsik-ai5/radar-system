@@ -14,6 +14,7 @@ from google import genai
 from google.genai import types
 from google.genai.errors import APIError
 from dotenv import load_dotenv
+from source_map import is_map_announcement, mask_map_promotion
 from radar_routing import (
     has_foreign_keywords,
     has_foreign_subject_geography,
@@ -376,9 +377,9 @@ def clean_source_text(text: str) -> str:
     Удаляет строки, состоящие только из подписей источников, и мягко вырезает
     встроенные подписи/ссылки из строк с текстом тревоги.
     """
-    if not text:
+    if not text or is_map_announcement(text):
         return ""
-    text = normalize_routing_text(text)
+    text = mask_map_promotion(normalize_routing_text(text))
     cleaned_lines = []
     for line in text.splitlines():
         stripped = line.strip()
@@ -543,6 +544,9 @@ def post_process_region_text(reg: str, raw_region_text: str, allow_region_prepen
     ).strip()
     body = re.sub(r"^ОТБОЙ\s*[:—\-]\s*", "Отбой ", body, flags=re.IGNORECASE).strip()
 
+    if is_map_announcement(body):
+        return ""
+    body = mask_map_promotion(body).rstrip(" \t\r\n-–—|🗺️🔗")
     body = strip_foreign_from_comma_lists(body, reg)
     if not body or len(body.strip(" —-:,.!?")) < 3:
         return ""

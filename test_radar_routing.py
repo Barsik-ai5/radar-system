@@ -3,6 +3,7 @@
 import ast
 from pathlib import Path
 
+from source_map import is_map_announcement, mask_map_promotion
 from radar_routing import (
     has_foreign_keywords,
     has_foreign_subject_geography,
@@ -90,6 +91,8 @@ POST_PROCESSOR_REGEXES = {
     "RETROSPECTIVE_SUMMARY_RE",
     "DAMAGE_SUMMARY_MARKERS_RE",
     "EVENT_WORD_RE",
+    "SIGNATURE_LINE_PATTERNS",
+    "INLINE_SIGNATURES_RE",
 }
 
 
@@ -99,7 +102,7 @@ def load_post_processor():
     tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
     selected = []
     for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "post_process_region_text":
+        if isinstance(node, ast.FunctionDef) and node.name in {"clean_source_text", "post_process_region_text"}:
             selected.append(node)
         elif isinstance(node, ast.Assign) and any(
             isinstance(target, ast.Name) and target.id in POST_PROCESSOR_REGEXES
@@ -113,6 +116,8 @@ def load_post_processor():
         "strip_foreign_from_comma_lists": strip_foreign_from_comma_lists,
         "has_region_keywords": has_region_keywords,
         "has_foreign_keywords": has_foreign_keywords,
+        "is_map_announcement": is_map_announcement,
+        "mask_map_promotion": mask_map_promotion,
         "BOTS_CONFIG": {
             "KURSK": {"short_region": "Курская область"},
             "BELGOROD": {"short_region": "Белгородская область"},
@@ -120,11 +125,11 @@ def load_post_processor():
     }
     module = ast.fix_missing_locations(ast.Module(body=selected, type_ignores=[]))
     exec(compile(module, str(source_path), "exec"), namespace)
-    return namespace["post_process_region_text"]
+    return namespace["clean_source_text"], namespace["post_process_region_text"]
 
 
 def run() -> None:
-    post_process = load_post_processor()
+    clean_source, post_process = load_post_processor()
     for index, (description, text, expected) in enumerate(CASES, start=1):
         actual = {
             region: is_region_threat_target(text, region)
@@ -200,6 +205,18 @@ def run() -> None:
     normalized = normalize_routing_text("Курская\u200b область – тревога")
     assert normalized == "Курская область - тревога"
     print("PASS Нормализация: невидимый символ удалён, en-dash приведён к стандарту")
+    message = "🟡 Курская область. Плановая проверка систем оповещения."
+    for footer in (
+        " Карта опасностей – radar-vrv.ru",
+        "\n🗺️ Карта активных угроз:\nhttps://www.radar-vrv.ru/map?view=all",
+        " | КАРТА ОПАСНОСТЕЙ",
+    ):
+        assert clean_source(message + footer) == clean_source(message)
+        assert post_process("KURSK", message + footer) == post_process("KURSK", message)
+    map_post = "🔴 Карта активных угроз от радара ВРВ\nСведения за последние 20 минут."
+    assert clean_source(map_post) == ""
+    assert post_process("KURSK", map_post) == ""
+    print("PASS Ссылка на карту удаляется до и после обработки, отдельный пост с картой пропускается")
     print(f"Успешно: {len(CASES)}/{len(CASES)} сценариев")
 
 
