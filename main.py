@@ -19,6 +19,7 @@ from radar_routing import (
     has_foreign_keywords,
     has_foreign_subject_geography,
     has_region_keywords,
+    is_multi_region_drone_summary,
     is_region_threat_target,
     normalize_routing_text,
     strip_foreign_from_comma_lists,
@@ -380,6 +381,8 @@ def clean_source_text(text: str) -> str:
     if not text or is_map_announcement(text):
         return ""
     text = mask_map_promotion(normalize_routing_text(text))
+    if is_multi_region_drone_summary(text):
+        return ""
     cleaned_lines = []
     for line in text.splitlines():
         stripped = line.strip()

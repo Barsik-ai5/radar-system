@@ -8,6 +8,7 @@ from radar_routing import (
     has_foreign_keywords,
     has_foreign_subject_geography,
     has_region_keywords,
+    is_multi_region_drone_summary,
     is_region_threat_target,
     normalize_routing_text,
     strip_foreign_from_comma_lists,
@@ -116,6 +117,7 @@ def load_post_processor():
         "strip_foreign_from_comma_lists": strip_foreign_from_comma_lists,
         "has_region_keywords": has_region_keywords,
         "has_foreign_keywords": has_foreign_keywords,
+        "is_multi_region_drone_summary": is_multi_region_drone_summary,
         "is_map_announcement": is_map_announcement,
         "mask_map_promotion": mask_map_promotion,
         "BOTS_CONFIG": {
@@ -217,6 +219,34 @@ def run() -> None:
     assert clean_source(map_post) == ""
     assert post_process("KURSK", map_post) == ""
     print("PASS Ссылка на карту удаляется до и после обработки, отдельный пост с картой пропускается")
+
+    overnight = (
+        "⚪ В течение прошедшей ночи с 20.00 мск 20 ноября до 08.00 мск 21 ноября "
+        "дежурными силами ПВО перехвачены и уничтожены 275 украинских "
+        "беспилотных летательных аппаратов самолетного типа над территориями "
+    )
+    summaries = (
+        overnight + "Белгородской, Курской, Ленинградской и Московской областей.",
+        overnight + "... Ленинградской",
+        "За сутки сбито 18 БПЛА над территориями Курской области и Республики Крым.",
+        "Сводка за ночь: 18 БПЛА уничтожены.\n"
+        "– 12 над Ленинградской областью,\n– 6 над Псковской областью.",
+        "За ночь над территорией России уничтожено 18 БПЛА.",
+    )
+    for summary in summaries:
+        assert clean_source(summary) == "", summary
+
+    single_region_posts = (
+        "Над территорией Ленинградской области сбито 49 БПЛА. Боевая работа продолжается.",
+        "По сообщению Минобороны России, за ночь сбито 3 БПЛА над территориями "
+        "Выборгского и Кингисеппского районов Ленинградской области.",
+        "3 БПЛА сбиты в Ленинградской области. Ленинградская область сообщает об итогах.",
+        "Над Белгородской областью сбито 2 БПЛА, прибывших со стороны Курской области.",
+        "Курская область, Белгородская область, Орловская область – отбой опасности по БПЛА.",
+    )
+    for regional_post in single_region_posts:
+        assert clean_source(regional_post) == regional_post.replace("–", "-"), regional_post
+    print("PASS Межрегиональные сводки блокируются до Gemini, локальные сообщения и отбой проходят")
     print(f"Успешно: {len(CASES)}/{len(CASES)} сценариев")
 
 

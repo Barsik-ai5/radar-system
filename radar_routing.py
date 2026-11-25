@@ -133,6 +133,29 @@ EVENT_WORD_RE = re.compile(
     re.IGNORECASE
 )
 
+_DRONE_COUNT = r"\b(?:\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d+)\s+(?:[а-яё-]+\s+){0,5}(?:бпла|дрон\w*|беспилот\w*)\b"
+_DRONE_OUTCOME = r"\b(?:перехвачен\w*|перехватил\w*|уничтож\w*|сбит\w*|сбил\w*|нейтрализован\w*|подавлен\w*)\b"
+_COUNTED_DRONE_OUTCOME_RE = re.compile(
+    rf"{_DRONE_OUTCOME}.{{0,100}}?{_DRONE_COUNT}|{_DRONE_COUNT}.{{0,100}}?{_DRONE_OUTCOME}",
+    re.IGNORECASE | re.DOTALL,
+)
+_SUMMARY_SCOPE_RE = re.compile(
+    r"\b(?:по\s+всей\s+(?:россии|рф)|(?:в\s+регионах|по\s+регионам)\s+(?:россии|рф)|"
+    r"(?:в|над)\s+(?:разных|нескольких|\d+)\s+регион\w*|"
+    r"над\s+(?:российскими\s+регионами|территорией\s+(?:россии|рф|российской\s+федерации))|"
+    r"над\s+территориями\s*(?:\.{3}|…))|"
+    r"\b[а-яё-]+(?:\s*,\s*[а-яё-]+)*(?:\s*,\s*|\s+и\s+)[а-яё-]+\s+"
+    r"(?:областей|кра[её]в|республик)\b",
+    re.IGNORECASE,
+)
+_SUMMARY_REGION_RE = re.compile(
+    r"\b([а-яё-]+(?:ск|цк|н))(?:ая|ой|ую|ом|ий|ого|ому|им)\s+"
+    r"(?:автономн\w+\s+)?(?:област[ьи]|областью|обл\.?|кра(?:й|я|е|ем))\b|"
+    r"\bреспублик[аиуе]\s+([а-яё-]+)\b",
+    re.IGNORECASE,
+)
+_SUMMARY_ORIGIN_RE = re.compile(r"\b(?:из|от|со\s+стороны)\s+(?:территории\s+)?$")
+
 
 def normalize_routing_text(text: str) -> str:
     """Remove invisible formatting characters and standardize Unicode dashes."""
@@ -140,6 +163,21 @@ def normalize_routing_text(text: str) -> str:
         return ""
     text = INVISIBLE_CHARS_RE.sub("", str(text))
     return DASH_VARIANTS_RE.sub("-", text)
+
+
+def is_multi_region_drone_summary(text: str) -> bool:
+    """Recognize aggregate drone counts before any region-specific text is cut."""
+    text = normalize_routing_text(text).casefold()
+    if not _COUNTED_DRONE_OUTCOME_RE.search(text):
+        return False
+    if _SUMMARY_SCOPE_RE.search(text):
+        return True
+    regions = {
+        match.group(1) or match.group(2)
+        for match in _SUMMARY_REGION_RE.finditer(text)
+        if not _SUMMARY_ORIGIN_RE.search(text, max(0, match.start() - 64), match.start())
+    }
+    return len(regions) > 1
 
 
 def _matches_keyword(text: str, keyword: str) -> bool:
